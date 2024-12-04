@@ -8,3 +8,7 @@ python3 -m pip install pandas
 ##
 python3 -m pip install notebook
 python3 -m pip install ipywidgets
+
+##
+python3 -m pip install pygrib
+
