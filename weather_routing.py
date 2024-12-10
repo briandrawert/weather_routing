@@ -2,30 +2,89 @@
 
 import datetime
 import pandas
+import pytz
 
-def simulate_shortest_path(lat_start,lng_start, lat_end, lng_end, gps_bounds):
+
+def route_shortest_path(waypoints_df, hour_offset=0):
+    """
+        given a 
+    """
     (FCdate, FCtime) = get_latest_grib_time()
-    print('starting time:',FCdate, FCtime)
-    simulation_time = 0
-    lat = lat_start
-    lng = lng_start
+    # calculate bounds
+    bounds = {
+        'lat': (waypoints_df['lat'].min()-0.25 , waypoints_df['lat'].max()+0.25),
+        'lng': (waypoints_df['lng'].min()-0.25 , waypoints_df['lng'].max()+0.25),
+    }
+    # first leg
+    print(f"{waypoints_df.iloc[0]['name']} at {FCdatetime_to_localtime(FCdate, FCtime, hour_offset)}")
+    route, sim_t = simulate_shortest_path(
+        waypoints_df.iloc[0]['lat'], waypoints_df.iloc[0]['lng'],
+        waypoints_df.iloc[1]['lat'], waypoints_df.iloc[1]['lng'],
+        bounds,
+        simulation_time=hour_offset,
+        FCdate=FCdate,
+        FCtime=FCtime
+        )
+    # rest of the legs
+    for wp_ndx in range(1,len(waypoints_df)-1):
+        print(f"{waypoints_df.iloc[wp_ndx]['name']} at {FCdatetime_to_localtime(FCdate, FCtime, sim_t)}")
+        route_t, sim_t = simulate_shortest_path(
+            route.iloc[-1]['lat'], route.iloc[-1]['lng'],
+            waypoints_df.iloc[wp_ndx+1]['lat'], waypoints_df.iloc[wp_ndx+1]['lng'],
+            bounds,
+            simulation_time=sim_t,
+            FCdate=FCdate,
+            FCtime=FCtime
+            )
+        # append this leg to the route
+        route = pandas.concat([route,route_t.iloc[1:]], ignore_index=True)
+    # end
+    print(f"{waypoints_df.iloc[-1]['name']} at {FCdatetime_to_localtime(FCdate, FCtime, sim_t)}")
+
+    return route
+
+
+
+def FCdatetime_to_localtime(FCdate,FCtime, hr_offset=0):
+    dt_utc = datetime.datetime.strptime(FCdate + FCtime, "%Y%m%d%H")
+    # Add "hr_offset" hours to the datetime
+    dt_utc = dt_utc + datetime.timedelta(hours=hr_offset)
+    dt_utc = pytz.utc.localize(dt_utc)
+
+    # Convert to the local timezone
+    local_tz = pytz.timezone("America/Los_Angeles")  # Replace with your timezone
+    dt_local = dt_utc.astimezone(local_tz)
+    # Print the result
+    #print("Local Time:", dt_local)
+    return dt_local
+
+
+
+def simulate_shortest_path(lat,lng, lat_end, lng_end, gps_bounds, simulation_time=0, 
+                            FCdate=None, FCtime=None):
+    """
+    Simulate the sailing of the rhum line path between two points
+    """
+    if FCdate is None or FCtime is None:
+        (FCdate, FCtime) = get_latest_grib_time()
+        print('starting time:',FCdate, FCtime,FCdatetime_to_localtime(FCdate, FCtime,simulation_time))
     last_dist_togo = haversine_distance(lat,lng,lat_end,lng_end);
     ####
     traveled_path = []
     traveled_path.append({  #start
-    		'lat':lat,
-    		'lng':lng,
-    	})
+            'lat':lat,
+            'lng':lng,
+        })
     #####
-    max_steps = 10
+    max_steps = 100
 
-    for _ in range(0,max_steps): # 10 steps
+    for _ in range(0,max_steps): # limit total number of steps
 
 
         grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
-        	simulation_time)
+            simulation_time)
         (tws, twd) = get_wind_at_location(grib_file, lat, lng, simulation_time)
-        print(f"{simulation_time}: ({lat},{lng}) tws={tws} twd={twd}")
+        #print(f"{simulation_time}: ({lat},{lng}) tws={tws} twd={twd}")
         polars = polar_rhiannon(tws)
         # find all possible angles
         best_dist_togo = None
@@ -44,19 +103,20 @@ def simulate_shortest_path(lat_start,lng_start, lat_end, lng_end, gps_bounds):
                     best_nav_args['lng']=dlng
                     best_nav_args['dtg']=dist_to_dest
                     best_nav_args['sog']=boat_speed
-        print('best_nav',best_nav_args)
+                    best_nav_args['date']=FCdatetime_to_localtime(FCdate, FCtime,simulation_time)
         if best_dist_togo < last_dist_togo:
-        	#save and keep going
+            print(f"{simulation_time}: twa={best_nav_args['twa']} mag={best_nav_args['mag']:.1f} dtg={best_nav_args['dtg']:.1f} sog={best_nav_args['sog']:.1f}")
+            #save and keep going
             traveled_path.append(best_nav_args)
             simulation_time+=1
             lat=best_nav_args['lat']
             lng=best_nav_args['lng']
             last_dist_togo = best_dist_togo
         else:
-        	# over shot
+            # over shot
             break
 
-    return pandas.DataFrame(traveled_path)
+    return pandas.DataFrame(traveled_path), simulation_time
             
                 
 
@@ -72,7 +132,7 @@ def get_latest_grib_time():
     """
     # Get the current UTC time
     now = datetime.datetime.now(datetime.UTC)
-    print(f"Current UTC time: {now.strftime('%c')}")
+    #print(f"Current UTC time: {now.strftime('%c')}")
 
     # GFS model updates every 6 hours (00, 06, 12, 18 UTC)
     # Find the most recent model run hour
@@ -87,28 +147,32 @@ def get_latest_grib_time():
     # Format as 'YYYYMMDD/HH'
     return recent_run_time.strftime("%Y%m%d"), recent_run_time.strftime("%H")
 
-# Example usage
-latest_grib_time = get_latest_grib_time()
-print(f"Latest GRIB time: {latest_grib_time}")
+
 
 # docs here: https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25_1hr
 import requests
+import os.path
 
 def download_nomads_gfs_forecast_file(grib_date, grib_time, lat_bounds, lng_bounds, simulation_time):
     min_lng = lng_bounds[0] if lng_bounds[0]>0 else lng_bounds[0]+360
     max_lng = lng_bounds[1] if lng_bounds[1]>0 else lng_bounds[1]+360
-    print(min_lng,max_lng)
+    #print(min_lng,max_lng)
     min_lat = lat_bounds[0]
     max_lat = lat_bounds[1]
     #https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl?dir=%2Fgfs.20241203%2F12%2Fatmos&file=gfs.t12z.pgrb2.0p25.f240&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on&subregion=&toplat=34.5&leftlon=238&rightlon=244&bottomlat=32
     url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl?dir=%2Fgfs.{grib_date}%2F{grib_time}%2Fatmos&file=gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on&subregion=&toplat={max_lat}&leftlon={min_lng}&rightlon={max_lng}&bottomlat={min_lat}"
-    print(url)
-    output_file = f"gfs.{grib_date}-{grib_time}-gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}"
-    print(output_file)
+    #print(url)
+    output_file = f"grib_files/gfs.{grib_date}-{grib_time}-gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}"
+    #print(output_file)
+
+    if os.path.isfile(output_file):
+        print(f"Using GRIB2 file: {output_file}")
+        return output_file
+
     
     try:
         # Make the request to download the GRIB2 file
-        print(f"starting download")
+        print(f"Starting download", end=" ")
         response = requests.get(url, stream=True)
         response.raise_for_status()  # Check for HTTP errors
         
@@ -117,7 +181,7 @@ def download_nomads_gfs_forecast_file(grib_date, grib_time, lat_bounds, lng_boun
             for chunk in response.iter_content(chunk_size=8192):
                 file.write(chunk)
         
-        print(f"GRIB2 file downloaded successfully: {output_file}")
+        print(f"GRIB2 file downloaded: {output_file}")
         return output_file
     except requests.exceptions.RequestException as e:
         print(f"Error downloading GRIB2 file: {e}")
@@ -250,21 +314,21 @@ def polar_rhiannon(wind_speed):
     """
     angles = [52,60,75,90,110,120,135,150,165,180]
     
-    tws = [6 ,	8 ,	10 ,	12 ,	16 ,	20 ,	24] #    'True wind speed':,
+    tws = [6 ,  8 , 10 ,    12 ,    16 ,    20 ,    24] #    'True wind speed':,
     
     data = {
     'Optimum Beat':[(48.2,3.87),(46.9,4.85),(45.8,5.44),(44.8,6.13),(43.4,6.6),(41.9,6.77),(41.8,6.87)],
     'Optimum Run':[(132.2,4.68),(139.1,5.33),(149.5,5.61),(151.4,6.32),(163.7,7.09),(170.7,7.73),(172.3,8.31)],
-    '52-degrees':[	4.17,	5.3,	6.09,	6.72,	7.26,	7.48,	7.57],
-    '60-degrees':[	4.68,	5.79,	6.67,	7.17,	7.64,	7.85,	7.97],
-    '75-degrees':[	5.63,	6.85,	7.5,	7.83,	8.23,	8.47,	8.61],
-    '90-degrees':[	6.04,	7.21,	7.81,	8.17,	8.6,	8.89,	9.1],
-    '110-degrees':[	5.95,	7.14,	7.73,	8.15,	8.81,	9.29,	9.57],
-    '120-degrees':[	5.62,	6.77,	7.45,	7.88,	8.57,	9.19,	9.75],
-    '135-degrees':[	4.44,	5.66,	6.59,	7.28,	8.1,	8.74,	9.36],
-    '150-degrees':[	3.45,	4.57,	5.58,	6.4,	7.59,	8.29,	8.88],
-    '165-degrees':[	2.9,	3.88,	4.81,	5.66,	7.04,	7.87,	8.47],
-    '180-degrees':[	2.61,	3.52,	4.39,	5.2,	6.59,	7.56,	8.18],
+    '52-degrees':[  4.17,   5.3,    6.09,   6.72,   7.26,   7.48,   7.57],
+    '60-degrees':[  4.68,   5.79,   6.67,   7.17,   7.64,   7.85,   7.97],
+    '75-degrees':[  5.63,   6.85,   7.5,    7.83,   8.23,   8.47,   8.61],
+    '90-degrees':[  6.04,   7.21,   7.81,   8.17,   8.6,    8.89,   9.1],
+    '110-degrees':[ 5.95,   7.14,   7.73,   8.15,   8.81,   9.29,   9.57],
+    '120-degrees':[ 5.62,   6.77,   7.45,   7.88,   8.57,   9.19,   9.75],
+    '135-degrees':[ 4.44,   5.66,   6.59,   7.28,   8.1,    8.74,   9.36],
+    '150-degrees':[ 3.45,   4.57,   5.58,   6.4,    7.59,   8.29,   8.88],
+    '165-degrees':[ 2.9,    3.88,   4.81,   5.66,   7.04,   7.87,   8.47],
+    '180-degrees':[ 2.61,   3.52,   4.39,   5.2,    6.59,   7.56,   8.18],
     }
     for ndx in range(len(tws)):
         if tws[ndx] > wind_speed: break
