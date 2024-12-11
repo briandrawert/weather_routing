@@ -81,9 +81,17 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, gps_bounds, simulation_tim
     for _ in range(0,max_steps): # limit total number of steps
 
 
-        grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
-            simulation_time)
-        (tws, twd) = get_wind_at_location(grib_file, lat, lng, simulation_time)
+        if simulation_time <= 120:
+            grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
+                simulation_time)
+            (tws, twd) = get_wind_at_location(grib_file, lat, lng, simulation_time)
+        else:
+            # for GFS, after 120, they give every 3 hours
+            hr3_sim_time = simulation_time-(simulation_time-120)%3
+            grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
+                hr3_sim_time)
+            (tws, twd) = get_wind_at_location(grib_file, lat, lng, hr3_sim_time)
+            
         #print(f"{simulation_time}: ({lat},{lng}) tws={tws} twd={twd}")
         polars = polar_rhiannon(tws)
         # find all possible angles
@@ -261,12 +269,20 @@ def get_wind_at_location(grib_file, mylat, mylng, simulation_time, verbose=False
 
 
             # Interpolate U and V components at the exact point
+            found_lat=False
+            found_lng=False
             for lat_ndx in range(0, lats.shape[0]):
                 #print(lat_ndx, lats[lat_ndx][0])
-                if lats[lat_ndx][0] > mylat: break
+                if lats[lat_ndx][0] > mylat:
+                    found_lat=True
+                    break
             for lng_ndx in range(0, lngs.shape[1]):
                 #print(lng_ndx, lngs[0][lng_ndx])
-                if lngs[0][lng_ndx] > mylng: break
+                if lngs[0][lng_ndx] > mylng: 
+                    found_lng=True
+                    break
+            if not found_lat or not found_lng:
+                raise Exception("could not find index for lat or long")
             ndx_n = lat_ndx
             ndx_s = lat_ndx-1
             ndx_w = lng_ndx
