@@ -170,7 +170,7 @@ def download_nomads_gfs_forecast_file(grib_date, grib_time, lat_bounds, lng_boun
     #https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl?dir=%2Fgfs.20241203%2F12%2Fatmos&file=gfs.t12z.pgrb2.0p25.f240&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on&subregion=&toplat=34.5&leftlon=238&rightlon=244&bottomlat=32
     url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl?dir=%2Fgfs.{grib_date}%2F{grib_time}%2Fatmos&file=gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on&subregion=&toplat={max_lat}&leftlon={min_lng}&rightlon={max_lng}&bottomlat={min_lat}"
     #print(url)
-    output_file = f"grib_files/gfs.{grib_date}-{grib_time}-gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}"
+    output_file = f"grib_files/{grib_date}-{grib_time}-gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}"
     #print(output_file)
 
     if os.path.isfile(output_file):

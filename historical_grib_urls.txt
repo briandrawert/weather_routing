@@ -1,3 +1,0 @@
-https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.20240701/00/atmos/gfs.t00z.pgrb2.0p25.f002
-
-https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.20230701/00/atmos/gfs.t00z.pgrb2.0p25.f000
