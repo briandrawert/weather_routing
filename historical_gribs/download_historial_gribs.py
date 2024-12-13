@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 import requests
 import os.path
+import time
 
 
-year=2024
-days=range(1,22)
+year=2023
+days=range(1,25)
 hours=[0,6,12,18]
 
 #url = "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.20240701/00/atmos/gfs.t00z.pgrb2.0p25.f000"
 
-max_retries=3
+max_retries=4
 timeout=1
 
 for day in days:
@@ -48,7 +49,7 @@ for day in days:
                     except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
                         retries += 1
                         print(f"\nError during download: {e}. Retrying ({retries}/{max_retries})...")
-                        time.sleep(1)  # Optional: Wait before retrying
+                        time.sleep(10**retries)  # wait an increasing amount
                 if retries == max_retries:
                     print("Max retries reached. Download failed.")
                     raise Exception("Failed to download file after multiple attempts.")
