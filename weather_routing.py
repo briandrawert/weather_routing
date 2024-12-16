@@ -5,25 +5,25 @@ import pandas
 import pytz
 
 
-def route_shortest_path(waypoints_df, hour_offset=0):
+def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time=None, grib_files_dir=None):
     """
         given a 
     """
-    (FCdate, FCtime) = get_latest_grib_time()
+    (FCdate, FCtime,_) = get_grib_time(start_date, start_time)
     # calculate bounds
-    bounds = {
-        'lat': (waypoints_df['lat'].min()-0.25 , waypoints_df['lat'].max()+0.25),
-        'lng': (waypoints_df['lng'].min()-0.25 , waypoints_df['lng'].max()+0.25),
-    }
+    #bounds = {
+    #    'lat': (waypoints_df['lat'].min()-0.25 , waypoints_df['lat'].max()+0.25),
+    #    'lng': (waypoints_df['lng'].min()-0.25 , waypoints_df['lng'].max()+0.25),
+    #}
     # first leg
     print(f"{waypoints_df.iloc[0]['name']} at {FCdatetime_to_localtime(FCdate, FCtime, hour_offset)}")
     route, sim_t = simulate_shortest_path(
         waypoints_df.iloc[0]['lat'], waypoints_df.iloc[0]['lng'],
         waypoints_df.iloc[1]['lat'], waypoints_df.iloc[1]['lng'],
-        bounds,
         simulation_time=hour_offset,
         FCdate=FCdate,
-        FCtime=FCtime
+        FCtime=FCtime,
+        grib_files_dir=grib_files_dir
         )
     # rest of the legs
     for wp_ndx in range(1,len(waypoints_df)-1):
@@ -31,10 +31,10 @@ def route_shortest_path(waypoints_df, hour_offset=0):
         route_t, sim_t = simulate_shortest_path(
             route.iloc[-1]['lat'], route.iloc[-1]['lng'],
             waypoints_df.iloc[wp_ndx+1]['lat'], waypoints_df.iloc[wp_ndx+1]['lng'],
-            bounds,
             simulation_time=sim_t,
             FCdate=FCdate,
-            FCtime=FCtime
+            FCtime=FCtime,
+            grib_files_dir=grib_files_dir
             )
         # append this leg to the route
         route = pandas.concat([route,route_t.iloc[1:]], ignore_index=True)
@@ -45,52 +45,50 @@ def route_shortest_path(waypoints_df, hour_offset=0):
 
 
 
-def FCdatetime_to_localtime(FCdate,FCtime, hr_offset=0):
-    dt_utc = datetime.datetime.strptime(FCdate + FCtime, "%Y%m%d%H")
-    # Add "hr_offset" hours to the datetime
-    dt_utc = dt_utc + datetime.timedelta(hours=hr_offset)
-    dt_utc = pytz.utc.localize(dt_utc)
 
-    # Convert to the local timezone
-    local_tz = pytz.timezone("America/Los_Angeles")  # Replace with your timezone
-    dt_local = dt_utc.astimezone(local_tz)
-    # Print the result
-    #print("Local Time:", dt_local)
-    return dt_local
-
-
-
-def simulate_shortest_path(lat,lng, lat_end, lng_end, gps_bounds, simulation_time=0, 
-                            FCdate=None, FCtime=None):
+#def simulate_shortest_path(lat,lng, lat_end, lng_end, gps_bounds, simulation_time=0, 
+#                            FCdate=None, FCtime=None, ):
+def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0, 
+                            FCdate=None, FCtime=None, grib_files_dir=None):
     """
     Simulate the sailing of the rhum line path between two points
     """
     if FCdate is None or FCtime is None:
-        (FCdate, FCtime) = get_latest_grib_time()
-        print('starting time:',FCdate, FCtime,FCdatetime_to_localtime(FCdate, FCtime,simulation_time))
+        (FCdate, FCtime,_) = get_grib_time()
+    print('starting time:',FCdate, FCtime,FCdatetime_to_localtime(FCdate, FCtime,simulation_time))
     last_dist_togo = haversine_distance(lat,lng,lat_end,lng_end);
     ####
     traveled_path = []
     traveled_path.append({  #start
             'lat':lat,
             'lng':lng,
+            'date': FCdatetime_to_localtime(FCdate, FCtime,simulation_time)
         })
     #####
-    max_steps = 100
+    max_steps = 1000
 
     for _ in range(0,max_steps): # limit total number of steps
-
-
-        if simulation_time <= 120:
-            grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
-                simulation_time)
-            (tws, twd) = get_wind_at_location(grib_file, lat, lng, simulation_time)
+        if grib_files_dir is not None:
+            (grib_file_date, grib_file_time, hr_offset) = get_grib_time(FCdate, FCtime, simulation_time)
+            grib_file = load_historical_gfs_forecast_file(grib_files_dir, grib_file_date, 
+                                                          grib_file_time, hr_offset)
+            print(f"loading file: {grib_file}")
+            (tws, twd) = get_wind_at_location(grib_file, lat, lng, hr_offset)
         else:
-            # for GFS, after 120, they give every 3 hours
-            hr3_sim_time = simulation_time-(simulation_time-120)%3
-            grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
-                hr3_sim_time)
-            (tws, twd) = get_wind_at_location(grib_file, lat, lng, hr3_sim_time)
+            gps_bounds = {
+               'lat': (lat-0.25 , lat+0.25),
+               'lng': (lng-0.25 , lng+0.25),
+            }
+            if simulation_time <= 120:
+                grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
+                    simulation_time)
+                (tws, twd) = get_wind_at_location(grib_file, lat, lng, simulation_time)
+            else:
+                # for GFS, after 120, they give every 3 hours
+                hr3_sim_time = simulation_time-(simulation_time-120)%3
+                grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
+                    hr3_sim_time)
+                (tws, twd) = get_wind_at_location(grib_file, lat, lng, hr3_sim_time)
             
         #print(f"{simulation_time}: ({lat},{lng}) tws={tws} twd={twd}")
         polars = polar_rhiannon(tws)
@@ -111,7 +109,7 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, gps_bounds, simulation_tim
                     best_nav_args['lng']=dlng
                     best_nav_args['dtg']=dist_to_dest
                     best_nav_args['sog']=boat_speed
-                    best_nav_args['date']=FCdatetime_to_localtime(FCdate, FCtime,simulation_time)
+                    best_nav_args['date']=FCdatetime_to_localtime(FCdate, FCtime,simulation_time+1)
         if best_dist_togo < last_dist_togo:
             print(f"{simulation_time}: twa={best_nav_args['twa']} mag={best_nav_args['mag']:.1f} dtg={best_nav_args['dtg']:.1f} sog={best_nav_args['sog']:.1f}")
             #save and keep going
@@ -131,30 +129,57 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, gps_bounds, simulation_tim
 
 
 
-def get_latest_grib_time():
+def get_grib_time(grib_date=None, grib_time=None, hr_offset=0):
     """
     Calculates the latest GRIB file base time in the format required for downloading.
 
     Returns:
         str: The latest base time in 'YYYYMMDD/HH' format.
     """
-    # Get the current UTC time
-    now = datetime.datetime.now(datetime.UTC)
-    #print(f"Current UTC time: {now.strftime('%c')}")
+    if grib_date is None or grib_time is None:
+        # Get the current UTC time
+        now = datetime.datetime.now(datetime.UTC)
+        #print(f"Current UTC time: {now.strftime('%c')}")
+    else:
+        # parse the grib_date/grib_time 
+        now = datetime.datetime.strptime(f"{grib_date} {grib_time}:00:00", "%Y%m%d %H:%M:%S")
+
+    if hr_offset is not None:
+        now = now + datetime.timedelta(hours=hr_offset)
 
     # GFS model updates every 6 hours (00, 06, 12, 18 UTC)
     # Find the most recent model run hour
     recent_run_hour = (now.hour // 6) * 6
     recent_run_time = now.replace(hour=recent_run_hour, minute=0, second=0, microsecond=0)
 
-    # If the current time is before the most recent run's availability, go back one cycle
-    # GFS files are typically available ~4 hours after the run starts
-    if now < recent_run_time + datetime.timedelta(hours=4):
-        recent_run_time -= datetime.timedelta(hours=6)
+    if grib_date is None or grib_time is None:
+        # If the current time is before the most recent run's availability, go back one cycle
+        # GFS files are typically available ~4 hours after the run starts
+        if now < recent_run_time + datetime.timedelta(hours=4):
+            recent_run_time -= datetime.timedelta(hours=6)
 
     # Format as 'YYYYMMDD/HH'
-    return recent_run_time.strftime("%Y%m%d"), recent_run_time.strftime("%H")
+    return recent_run_time.strftime("%Y%m%d"), recent_run_time.strftime("%H"), math.floor((now-recent_run_time).total_seconds()/3600)
 
+
+def FCdatetime_to_localtime(FCdate,FCtime, hr_offset=0):
+    dt_utc = datetime.datetime.strptime(FCdate + FCtime, "%Y%m%d%H")
+    # Add "hr_offset" hours to the datetime
+    dt_utc = dt_utc + datetime.timedelta(hours=hr_offset)
+    dt_utc = pytz.utc.localize(dt_utc)
+
+    # Convert to the local timezone
+    local_tz = pytz.timezone("America/Los_Angeles")  # Replace with your timezone
+    dt_local = dt_utc.astimezone(local_tz)
+    # Print the result
+    #print("Local Time:", dt_local)
+    return dt_local
+
+def load_historical_gfs_forecast_file(grib_files_dir, grib_date, grib_time, hr_offset):
+    output_file = f"{grib_files_dir}/{grib_date}-{grib_time}-gfs.t{grib_time}z.pgrb2.0p25.f{hr_offset:03}"
+    if not os.path.isfile(output_file):
+        raise Exception(f"NOT FOUND:'{output_file}'")
+    return output_file
 
 
 # docs here: https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25_1hr
@@ -170,7 +195,7 @@ def download_nomads_gfs_forecast_file(grib_date, grib_time, lat_bounds, lng_boun
     #https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl?dir=%2Fgfs.20241203%2F12%2Fatmos&file=gfs.t12z.pgrb2.0p25.f240&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on&subregion=&toplat=34.5&leftlon=238&rightlon=244&bottomlat=32
     url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl?dir=%2Fgfs.{grib_date}%2F{grib_time}%2Fatmos&file=gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on&subregion=&toplat={max_lat}&leftlon={min_lng}&rightlon={max_lng}&bottomlat={min_lat}"
     #print(url)
-    output_file = f"grib_files/{grib_date}-{grib_time}-gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}"
+    output_file = f"grib_files/{grib_date}-{grib_time}-gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}_{max_lat}_{min_lat}_{max_lng}_{min_lng}"
     #print(output_file)
 
     if os.path.isfile(output_file):
