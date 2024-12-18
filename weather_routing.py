@@ -3,12 +3,14 @@
 import datetime
 import pandas
 import pytz
-
+import time
 
 def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time=None, grib_files_dir=None):
     """
         given a 
+
     """
+    tic = time.time()
     (FCdate, FCtime,_) = get_grib_time(start_date, start_time)
     # calculate bounds
     #bounds = {
@@ -40,6 +42,7 @@ def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time
         route = pandas.concat([route,route_t.iloc[1:]], ignore_index=True)
     # end
     print(f"{waypoints_df.iloc[-1]['name']} at {FCdatetime_to_localtime(FCdate, FCtime, sim_t)}")
+    print(f"route calculated in {time.time()-tic:.1f}s")
 
     return route
 
