@@ -4,8 +4,75 @@ import datetime
 import pandas
 import pytz
 import time
+import requests
+import os.path
+import math
+import pygrib
+import pickle
+import copy
 
-def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time=None, grib_files_dir=None):
+shore_boundaries=[
+  [ (33.72042, -118.20665), #Long breach, PV
+    (33.7025267, -118.25570833),
+    (33.70421,-118.29362),
+    (33.71349, -118.31815667),
+    (33.73722, -118.40627),
+    (33.77504, -118.42992) ],
+  [ (33.31505, -118.28944), # Catalina 
+    (33.40954, -118.36371),
+    (33.47957, -118.53720),
+    (33.47954, -118.60711),
+    (33.44873, -118.59738)]
+]
+
+
+
+def route_all_paths(waypoints_df, hour_offset=0, start_date=None, start_time=None, 
+                        wind_data_dir=None,
+                        gps_bounds=None, #[min_lat,max_lat,max_lng,min_lng]
+                        max_deg_deviation_from_rhumb=90):
+    """
+    ONLY works for 1 leg so far 
+    """
+    tic = time.time()
+    (FCdate, FCtime,_) = get_grib_time(start_date, start_time)
+
+    # first leg
+    print(f"{waypoints_df.iloc[0]['name']} at {FCdatetime_to_localtime(FCdate, FCtime, hour_offset)}")
+
+    # find the rhumb_route, that is the longest acceptable time
+    rhumb_route, rhumb_route_t = simulate_shortest_path(
+        waypoints_df.iloc[0]['lat'], waypoints_df.iloc[0]['lng'],
+        waypoints_df.iloc[1]['lat'], waypoints_df.iloc[1]['lng'],
+        simulation_time=hour_offset,
+        FCdate=FCdate,
+        FCtime=FCtime,
+        wind_data_dir=wind_data_dir
+        )
+    print(f"Rhumb route takes {rhumb_route_t} steps")
+
+
+    all_routes = simulate_all_paths(
+                        waypoints_df.iloc[0]['lat'], waypoints_df.iloc[0]['lng'],
+                        waypoints_df.iloc[1]['lat'], waypoints_df.iloc[1]['lng'],
+                        simulation_time=hour_offset, 
+                        FCdate=FCdate, FCtime=FCtime, 
+                        wind_data_dir=wind_data_dir,
+                        gps_bounds=gps_bounds,
+                        max_deg_deviation_from_rhumb=90,
+                        max_simulation_time=rhumb_route_t
+                        )
+
+
+    # print out calculation time
+    print(f"calculated in {time.time()-tic:.1f}s")
+    return rhumb_route, all_routes
+
+
+
+def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time=None, 
+                        wind_data_dir=None,gps_bounds=None,
+                        max_deg_deviation_from_rhumb=90):
     """
         given a 
 
@@ -25,9 +92,10 @@ def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time
         simulation_time=hour_offset,
         FCdate=FCdate,
         FCtime=FCtime,
-        grib_files_dir=grib_files_dir
+        wind_data_dir=wind_data_dir
         )
     # rest of the legs
+
     for wp_ndx in range(1,len(waypoints_df)-1):
         print(f"{waypoints_df.iloc[wp_ndx]['name']} at {FCdatetime_to_localtime(FCdate, FCtime, sim_t)}")
         route_t, sim_t = simulate_shortest_path(
@@ -36,7 +104,7 @@ def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time
             simulation_time=sim_t,
             FCdate=FCdate,
             FCtime=FCtime,
-            grib_files_dir=grib_files_dir
+            wind_data_dir=wind_data_dir
             )
         # append this leg to the route
         route = pandas.concat([route,route_t.iloc[1:]], ignore_index=True)
@@ -47,12 +115,114 @@ def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time
     return route
 
 
+def simulate_all_paths(lat,lng, lat_end, lng_end, simulation_time=0, 
+                        FCdate=None, FCtime=None, 
+                        wind_data_dir=None,
+                        gps_bounds=None,
+                        max_deg_deviation_from_rhumb=90,
+                        max_simulation_time=1000):
+    
+    traveled_path = []
+    traveled_path.append({  #start
+            'lat':lat,
+            'lng':lng,
+            'date': FCdatetime_to_localtime(FCdate, FCtime,simulation_time)
+        })
+
+    all_routes = []
+
+
+    # start recursive process
+    take_simulation_step(all_routes, traveled_path, None,
+                        max_simulation_time, FCdate, FCtime, simulation_time, 
+                        lat, lng,
+                        lat, lng, #start
+                        lat_end, lng_end,
+                        wind_data_dir,
+                        gps_bounds, max_deg_deviation_from_rhumb
+                        )
+    #
+    return all_routes
+
+
+
+def take_simulation_step(route_storage, past_traveled_path, next_route_step,
+                        max_simulation_time,
+                        FCdate, FCtime, simulation_time,
+                        lat, lng,
+                        lat_start, lng_start,
+                        lat_end, lng_end,
+                        wind_data_dir,
+                        gps_bounds=None,
+                        max_deg_deviation_from_rhumb=90,
+                        ):
+
+    time_step_size = 1 #hour
+
+    # short cuurcit
+    if len(route_storage)>10: return
+
+    traveled_path = copy.copy(past_traveled_path)
+    if next_route_step is not None:
+        traveled_path.append(next_route_step)
+
+        # check if we have reached our destination
+        # method: if distance traveled (boat_speed*time_step_size) > dist_to_dest, we have arived
+        if( next_route_step['sog'] > next_route_step['dtg'] and \
+            haversine_distance(lat,lng, lat_start,lng_start) >= haversine_distance(lat_end,lng_end, lat_start,lng_start)  ):
+            route_storage.append(traveled_path)
+            print(f"found path of {len(traveled_path)} steps")
+            return
+
+
+    (grib_file_date, grib_file_time, hr_offset) = get_grib_time(FCdate, FCtime, simulation_time)
+    wind_data = load_historical_gfs_forecast(wind_data_dir, grib_file_date, 
+                                                  grib_file_time, hr_offset)
+    (tws, twd) = get_wind_at_location_from_data(wind_data, lat, lng)
+    polars = polar_rhiannon(tws)
+    for (angle,boat_speed) in polars:
+        for delta_angle in (angle, -1*angle):
+            boat_mag = (twd+delta_angle)%360
+            (dlat,dlng) = calculate_destination_latlng(lat,lng,boat_speed,boat_mag,time_step_size) # hour
+            dist_to_dest = haversine_distance(dlat,dlng,lat_end,lng_end)
+            # Check to see if we need to prune this path:
+            # check the max simulation time
+            if simulation_time+1 > max_simulation_time:
+                continue # throw away this path
+            # check the angle deviation
+            if calculate_deviation(lat, lng, lat_end, lng_end, boat_mag) > max_deg_deviation_from_rhumb:
+                continue # throw away this path
+            # check the bounds
+            if gps_bounds is not None:
+                [min_lat,max_lat,max_lng,min_lng] = gps_bounds
+                if dlat < min_lat or dlat > max_lat or dlng < min_lng or dlng > max_lng:
+                    continue #throw away this path
+            # take the next step
+            next_route_step = {}
+            next_route_step['twa']=angle
+            next_route_step['mag']=boat_mag
+            next_route_step['lat']=dlat
+            next_route_step['lng']=dlng
+            next_route_step['dtg']=dist_to_dest
+            next_route_step['sog']=boat_speed
+            next_route_step['date']=FCdatetime_to_localtime(FCdate, FCtime,simulation_time+1)
+            #
+            take_simulation_step(route_storage, traveled_path, next_route_step,
+                        max_simulation_time,
+                        FCdate, FCtime, simulation_time+1,
+                        dlat, dlng,
+                        lat_start, lng_start,
+                        lat_end, lng_end,
+                        wind_data_dir,
+                        gps_bounds,
+                        max_deg_deviation_from_rhumb)
+
 
 
 #def simulate_shortest_path(lat,lng, lat_end, lng_end, gps_bounds, simulation_time=0, 
 #                            FCdate=None, FCtime=None, ):
 def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0, 
-                            FCdate=None, FCtime=None, grib_files_dir=None):
+                            FCdate=None, FCtime=None, wind_data_dir=None):
     """
     Simulate the sailing of the rhum line path between two points
     """
@@ -71,12 +241,11 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
     max_steps = 1000
 
     for _ in range(0,max_steps): # limit total number of steps
-        if grib_files_dir is not None:
+        if wind_data_dir is not None:
             (grib_file_date, grib_file_time, hr_offset) = get_grib_time(FCdate, FCtime, simulation_time)
-            grib_file = load_historical_gfs_forecast_file(grib_files_dir, grib_file_date, 
+            wind_data = load_historical_gfs_forecast(wind_data_dir, grib_file_date, 
                                                           grib_file_time, hr_offset)
-            print(f"loading file: {grib_file}")
-            (tws, twd) = get_wind_at_location(grib_file, lat, lng, hr_offset)
+            (tws, twd) = get_wind_at_location_from_data(wind_data, lat, lng)
         else:
             gps_bounds = {
                'lat': (lat-0.25 , lat+0.25),
@@ -85,13 +254,13 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
             if simulation_time <= 120:
                 grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
                     simulation_time)
-                (tws, twd) = get_wind_at_location(grib_file, lat, lng, simulation_time)
+                (tws, twd) = get_wind_at_location_from_grib(grib_file, lat, lng, simulation_time)
             else:
                 # for GFS, after 120, they give every 3 hours
                 hr3_sim_time = simulation_time-(simulation_time-120)%3
                 grib_file = download_nomads_gfs_forecast_file(FCdate, FCtime, gps_bounds['lat'], gps_bounds['lng'], 
                     hr3_sim_time)
-                (tws, twd) = get_wind_at_location(grib_file, lat, lng, hr3_sim_time)
+                (tws, twd) = get_wind_at_location_from_grib(grib_file, lat, lng, hr3_sim_time)
             
         #print(f"{simulation_time}: ({lat},{lng}) tws={tws} twd={twd}")
         polars = polar_rhiannon(tws)
@@ -104,7 +273,8 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
                 (dlat,dlng) = calculate_destination_latlng(lat,lng,boat_speed,boat_mag,1) # hour
                 dist_to_dest = haversine_distance(dlat,dlng,lat_end,lng_end)
                 #print(f" twa={angle} mag={boat_mag:.1f} dest=({dlat:.1f},{dlng:.1f}) dist_togo={dist_to_dest:.1f}")
-                if best_dist_togo is None or dist_to_dest < best_dist_togo:
+                if (best_dist_togo is None or dist_to_dest < best_dist_togo) and \
+                    not does_path_cross_boundary(lat,lng,dlat,dlng,shore_boundaries):
                     best_dist_togo = dist_to_dest
                     best_nav_args['twa']=angle
                     best_nav_args['mag']=boat_mag
@@ -129,8 +299,40 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
             
                 
 
+def calculate_deviation(lat, lng, dlat, dlng, mag):
+    """
+    Calculate the deviation from the direct line (great circle bearing) 
+    to the destination.
 
+    Args:
+        lat (float): Current latitude in degrees.
+        lng (float): Current longitude in degrees.
+        dlat (float): Destination latitude in degrees.
+        dlng (float): Destination longitude in degrees.
+        mag (float): Current heading in degrees.
 
+    Returns:
+        float: Deviation in degrees (-180 to 180).
+    """
+    # Convert degrees to radians
+    lat = math.radians(lat)
+    lng = math.radians(lng)
+    dlat = math.radians(dlat)
+    dlng = math.radians(dlng)
+    
+    # Calculate the great circle bearing
+    delta_lng = dlng - lng
+    y = math.sin(delta_lng) * math.cos(dlat)
+    x = math.cos(lat) * math.sin(dlat) - math.sin(lat) * math.cos(dlat) * math.cos(delta_lng)
+    bearing = math.atan2(y, x)
+    
+    # Convert bearing to degrees and normalize to 0–360
+    bearing_deg = (math.degrees(bearing) + 360) % 360
+    
+    # Calculate deviation
+    deviation = (mag - bearing_deg + 540) % 360 - 180
+    
+    return math.fabs(deviation)
 
 def get_grib_time(grib_date=None, grib_time=None, hr_offset=0):
     """
@@ -178,16 +380,16 @@ def FCdatetime_to_localtime(FCdate,FCtime, hr_offset=0):
     #print("Local Time:", dt_local)
     return dt_local
 
-def load_historical_gfs_forecast_file(grib_files_dir, grib_date, grib_time, hr_offset):
-    output_file = f"{grib_files_dir}/{grib_date}-{grib_time}-gfs.t{grib_time}z.pgrb2.0p25.f{hr_offset:03}"
-    if not os.path.isfile(output_file):
-        raise Exception(f"NOT FOUND:'{output_file}'")
-    return output_file
+def load_historical_gfs_forecast(wind_data_dir, grib_date, grib_time, hr_offset):
+    pkl_file = f"{wind_data_dir}/{grib_date}-{grib_time:02}-gfs.0p25.f{hr_offset:03}.pkl"
+    if not os.path.isfile(pkl_file):
+        raise Exception(f"PKL file not found:'{pkl_file}'")
+    with open(pkl_file, 'rb') as fd:
+        wind_data = pickle.load(fd)
+    return wind_data
 
 
 # docs here: https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25_1hr
-import requests
-import os.path
 
 def download_nomads_gfs_forecast_file(grib_date, grib_time, lat_bounds, lng_bounds, simulation_time):
     min_lng = lng_bounds[0] if lng_bounds[0]>0 else lng_bounds[0]+360
@@ -224,7 +426,6 @@ def download_nomads_gfs_forecast_file(grib_date, grib_time, lat_bounds, lng_boun
         raise e
     
 
-import math
 def haversine_distance(lat1, lon1, lat2, lon2):
     """
     Calculate the distance between two points on the Earth in nautical miles.
@@ -269,11 +470,66 @@ def mps_to_knots(speed_mps):
     return speed_mps * knots_per_mps
 
 
-import pygrib
-import numpy as np
-from math import atan2, degrees, sqrt
 
-def get_wind_at_location(grib_file, mylat, mylng, simulation_time, verbose=False):
+def get_wind_at_location_from_data(wind_data, mylat, mylng, verbose=False):
+
+    lats = wind_data['lats']
+    lngs = wind_data['lngs']
+    v_msg = wind_data['v_msg']
+    u_msg = wind_data['u_msg']
+
+    found_lat=False
+    found_lng=False
+    for lat_ndx in range(0, lats.shape[0]):
+        #print(lat_ndx, lats[lat_ndx][0])
+        if lats[lat_ndx][0] > mylat:
+            found_lat=True
+            break
+    for lng_ndx in range(0, lngs.shape[1]):
+        #print(lng_ndx, lngs[0][lng_ndx])
+        if lngs[0][lng_ndx] > mylng: 
+            found_lng=True
+            break
+    if not found_lat or not found_lng:
+        raise Exception("could not find index for lat or long")
+    ndx_n = lat_ndx
+    ndx_s = lat_ndx-1
+    ndx_w = lng_ndx
+    ndx_e = lng_ndx-1
+    d_nw = haversine_distance(mylat,mylng, lats[ndx_n][0], lngs[0][ndx_w])
+    d_ne = haversine_distance(mylat,mylng, lats[ndx_n][0], lngs[0][ndx_e])
+    d_sw = haversine_distance(mylat,mylng, lats[ndx_s][0], lngs[0][ndx_w])
+    d_se = haversine_distance(mylat,mylng, lats[ndx_s][0], lngs[0][ndx_e])
+    w_nw = d_nw / (d_nw+d_ne+d_sw+d_se)
+    w_ne = d_ne / (d_nw+d_ne+d_sw+d_se)
+    w_sw = d_sw / (d_nw+d_ne+d_sw+d_se)
+    w_se = d_se / (d_nw+d_ne+d_sw+d_se)
+    if verbose:
+        print(f"NW: ({lats[ndx_n][0]},{lngs[0][ndx_w]})  d={d_nw} w={w_nw} u={u_msg[ndx_n][ndx_w]} v={v_msg[ndx_n][ndx_w]}")
+        print(f"NE: ({lats[ndx_n][0]},{lngs[0][ndx_e]})  d={d_ne} w={w_ne} u={u_msg[ndx_n][ndx_e]} v={v_msg[ndx_n][ndx_e]}")
+        print(f"SW: ({lats[ndx_s][0]},{lngs[0][ndx_w]})  d={d_sw} w={w_sw} u={u_msg[ndx_s][ndx_w]} v={v_msg[ndx_s][ndx_w]}")
+        print(f"SE: ({lats[ndx_s][0]},{lngs[0][ndx_e]})  d={d_se} w={w_se} u={u_msg[ndx_s][ndx_e]} v={v_msg[ndx_s][ndx_e]}")
+    
+    v_wind = w_nw * v_msg[ndx_n][ndx_w] \
+           + w_ne * v_msg[ndx_n][ndx_e] \
+           + w_sw * v_msg[ndx_s][ndx_w] \
+           + w_se * v_msg[ndx_s][ndx_e]
+    u_wind = w_nw * u_msg[ndx_n][ndx_w] \
+           + w_ne * u_msg[ndx_n][ndx_e] \
+           + w_sw * u_msg[ndx_s][ndx_w] \
+           + w_se * u_msg[ndx_s][ndx_e]            
+    
+    # Calculate wind speed (m/s->knots) and direction (degrees)
+    wind_speed = mps_to_knots( math.sqrt(u_wind**2 + v_wind**2) )
+    wind_direction = (270 - math.degrees(math.atan2(v_wind, u_wind))) % 360
+    if verbose:
+        print(f"Wind: u={u_wind} v={v_wind}")
+        print(f"wind_speed {wind_speed}, wind_direction {wind_direction}")
+    return (wind_speed, wind_direction)
+
+
+
+def get_wind_at_location_from_grib(grib_file, mylat, mylng, simulation_time, verbose=False):
     """
     Extracts wind speed and direction at a given GPS coordinate and time from a GRIB2 file.
 
@@ -339,8 +595,8 @@ def get_wind_at_location(grib_file, mylat, mylng, simulation_time, verbose=False
                    + w_se * u_msg[ndx_s][ndx_e]            
             
             # Calculate wind speed (m/s->knots) and direction (degrees)
-            wind_speed = mps_to_knots( sqrt(u_wind**2 + v_wind**2) )
-            wind_direction = (270 - degrees(atan2(v_wind, u_wind))) % 360
+            wind_speed = mps_to_knots( math.sqrt(u_wind**2 + v_wind**2) )
+            wind_direction = (270 - math.degrees(math.atan2(v_wind, u_wind))) % 360
             if verbose:
                 print(f"Wind: u={u_wind} v={v_wind}")
                 print(f"wind_speed {wind_speed}, wind_direction {wind_direction}")
@@ -451,3 +707,86 @@ def calculate_destination_latlng(lat, lon, speed_knots, direction, travel_time_h
     
     return destination_lat, destination_lon
 
+
+
+def get_parent_isochron_routes(isochrons, lat, lng, simulation_time):
+    parent_routes = []
+    if simulation_time > 0:
+        for route in isochrons[simulation_time-1]:
+            if route[-1]['lat']==lat and route[-1]['lng']==lng: continue # skip the path you took, it will always intersect
+            parent_routes.append(((route[-2]['lat'],route[-2]['lng']),(route[-1]['lat'],route[-1]['lng'])))
+    return parent_routes
+
+def does_path_cross_parent_path(lat,lng, dlat, dlng, parent_isochron_routes):
+    # Check intersection with each boundary segment
+    for route in parent_isochron_routes:
+        if lines_intersect((lat, lng), (dlat, dlng), route[0], route[1]):
+            print(f"red=[({lat:.5f}, {lng:.5f}),({dlat:.5f}, {dlng:.5f})] , blue=[({float(route[0][0]):.5f},{float(route[0][1]):.5f}),({float(route[1][0]):.5f},{float(route[1][1]):.5f})]")
+            return True
+    return False
+
+def does_path_cross_boundary(lat, lng, dlat, dlng, boundaries):
+    """
+    Check if the path from (lat, lng) to (dlat, dlng) crosses a boundary.
+
+    Args:
+        lat (float): Current latitude.
+        lng (float): Current longitude.
+        dlat (float): Destination latitude.
+        dlng (float): Destination longitude.
+        boundaries (list of lists of tuples): List of Lists of (latitude, longitude) 
+            pairs defining the boundary.
+
+    Returns:
+        bool: True if the path crosses the boundary, False otherwise.
+    """
+
+
+    # Current path as a segment
+    current_path = ((lat, lng), (dlat, dlng))
+    #print(f"current_path={current_path}")
+
+    # Check intersection with each boundary segment
+    for boundary in boundaries:
+        #print(f"boundary={boundary}")
+        for i in range(len(boundary) - 1):
+            boundary_segment = (boundary[i], boundary[i + 1])
+            #print(f"   boundary_segment={boundary_segment}")
+            if lines_intersect(current_path[0], current_path[1], boundary_segment[0], boundary_segment[1]):
+                return True
+
+    return False
+
+def lines_intersect(p1, p2, q1, q2):
+    """Check if two line segments (p1-p2 and q1-q2) intersect."""
+    def orientation(a, b, c):
+        """Find orientation of the triplet (a, b, c)."""
+        val = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1])
+        #print(f"orientation({a}, {b}, {c}) val={val}")
+        if val == 0:
+            return 0  # Collinear
+        return 1 if val > 0 else -1  # Clockwise or counterclockwise
+
+    def on_segment(a, b, c):
+        """Check if point b lies on segment a-c."""
+        return (min(a[0], c[0]) <= b[0] <= max(a[0], c[0]) and
+                min(a[1], c[1]) <= b[1] <= max(a[1], c[1]))
+
+    o1 = orientation(p1, p2, q1)
+    o2 = orientation(p1, p2, q2)
+    o3 = orientation(q1, q2, p1)
+    o4 = orientation(q1, q2, p2)
+
+    #print(f"o1={o1} o2={o2} o3={o3} o4={o4}")
+
+    # General case
+    if o1 != o2 and o3 != o4:
+        return True
+
+    # Special cases
+    if o1 == 0 and on_segment(p1, q1, p2): return True
+    if o2 == 0 and on_segment(p1, q2, p2): return True
+    if o3 == 0 and on_segment(q1, p1, q2): return True
+    if o4 == 0 and on_segment(q1, p2, q2): return True
+
+    return False

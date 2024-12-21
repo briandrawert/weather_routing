@@ -4,7 +4,7 @@ import os.path
 import time
 
 
-year=2021
+year=2020
 days=range(1,25)
 hours=[0,6,12,18]
 
