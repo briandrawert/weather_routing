@@ -18,11 +18,13 @@ shore_boundaries=[
     (33.71349, -118.31815667),
     (33.73722, -118.40627),
     (33.77504, -118.42992) ],
-  [ (33.31505, -118.28944), # Catalina 
+  [ (33.30681, -118.14915),# Catalina 
+    (33.31505, -118.28944), 
     (33.40954, -118.36371),
     (33.47957, -118.53720),
     (33.47954, -118.60711),
-    (33.44873, -118.59738)]
+    (33.44873, -118.59738),
+    ]
 ]
 
 
@@ -721,7 +723,6 @@ def does_path_cross_parent_path(lat,lng, dlat, dlng, parent_isochron_routes):
     # Check intersection with each boundary segment
     for route in parent_isochron_routes:
         if lines_intersect((lat, lng), (dlat, dlng), route[0], route[1]):
-            print(f"red=[({lat:.5f}, {lng:.5f}),({dlat:.5f}, {dlng:.5f})] , blue=[({float(route[0][0]):.5f},{float(route[0][1]):.5f}),({float(route[1][0]):.5f},{float(route[1][1]):.5f})]")
             return True
     return False
 
