@@ -29,6 +29,193 @@ shore_boundaries=[
 
 
 
+def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_data_dir,
+                       lat_start,lng_start,lat_end, lng_end, time_step_size,
+                       max_deviation_angle=90, max_turn_angle=120, max_chull_segment_len=1):
+    #print(parent_isochron)
+    #return
+    isochron=[]
+    (grib_file_date, grib_file_time, hr_offset) = get_grib_time(FCdate, FCtime, simulation_time)
+    min_dtw = None
+    ###
+    for past_traveled_path in parent_isochron:
+        lat = past_traveled_path[-1]['lat']
+        lng = past_traveled_path[-1]['lng']
+        ###
+        wind_data = load_historical_gfs_forecast(wind_data_dir, grib_file_date, 
+                                                          grib_file_time, hr_offset)
+        (tws, twd) = get_wind_at_location_from_data(wind_data, lat, lng)
+        polars = polar_rhiannon(tws)
+        parent_isochron_routes = get_parent_isochron_routes(parent_isochron,lat,lng)
+        ###
+        boat_mag_history={}
+        for (angle,boat_speed) in polars:
+            for delta_angle in (angle, -1*angle):
+                boat_mag = (twd+delta_angle)%360
+                ##
+                if boat_mag in boat_mag_history: continue
+                boat_mag_history[boat_mag]=1
+                ##
+                dev_angle = calculate_deviation(lat, lng, lat_end, lng_end, boat_mag)
+                # check if we should prune the path
+                if dev_angle > max_deviation_angle:
+                    print(f"   mag {boat_mag} deviation={dev_angle} too big")
+                    continue                
+                if simulation_time > 0: # don't calculate turn angle on step 1
+                    turn_angle =  math.fabs((past_traveled_path[-1]['mag'] - boat_mag + 540) % 360 - 180)
+                    if turn_angle > max_turn_angle:
+                        print(f"    mag {boat_mag} turn_angle={turn_angle} too big ")
+                        continue
+                ##
+                (dlat,dlng) = calculate_destination_latlng(lat,lng,boat_speed,boat_mag,time_step_size) # hour
+                dist_traveled = time_step_size * boat_speed
+                ##
+                if does_path_cross_boundary(lat, lng, dlat, dlng, shore_boundaries):
+                    print(f"    mag {boat_mag} crosses land")
+                    continue
+                if does_path_cross_parent_path(lat,lng, dlat, dlng, parent_isochron_routes):
+                    print(f"    mag {boat_mag} crosses parent route")
+                    continue
+                # save the path
+                print(f"mag {boat_mag} ({lat},{lng}) ({dlat},{dlng})")
+                traveled_path = copy.copy(past_traveled_path)
+                traveled_path.append({
+                    'lat':dlat,
+                    'lng':dlng,
+                    'mag':boat_mag,
+                    'sog':boat_speed,
+                    'dtw':haversine_distance(dlat,dlng,lat_end,lng_end),
+                    'twa':angle,
+                    'tdt':past_traveled_path[-1]['tdt']+dist_traveled,
+                    'date':FCdatetime_to_localtime(FCdate, FCtime,simulation_time+1),
+                })
+                isochron.append(traveled_path)
+    isochron.sort(key= lambda x: ccw_crossprod_normalized( (lat_start+1,lng_start), (lat_start,lng_start), (x[-1]['lat'],x[-1]['lng']) ))
+    # print("isochron = [")
+    # for x in isochron:
+    #     print("{",end='')
+    #     print(f"'lat':{x[-1]['lat']},",end='')
+    #     print(f"'lng':{x[-1]['lng']},",end='')
+    #     sv = ccw_crossprod_normalized( (lat_start+1,lng_start), (lat_start,lng_start), (x[-1]['lat'],x[-1]['lng']) )
+    #     print(f"'sort':{sv},",end='')
+    #     print("},")
+    # print("]")
+    # return isochron
+    ################
+    # find the convex hull to represent the isochron
+    print(f"============= CONVEX HULL: start with {len(isochron)} routes")
+    convex_hull = []
+    # find the min_dtw point, accept it
+    convex_hull.append(min(isochron, key=lambda x:x[-1]['dtw']))
+    isochron = [item for item in isochron if item != convex_hull[0]]
+    print(f"min_dtw point: ({(convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'])}) mag:{convex_hull[0][-1]['mag']}")
+    isochron.sort(key= lambda x: ccw_crossprod_normalized( 
+        (lat_start,lng_start), 
+        (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+        (x[-1]['lat'],x[-1]['lng']) 
+    ))
+    print("isochron = [")
+    for x in [*isochron, *convex_hull]:
+        print("{",end='')
+        print(f"'lat':{x[-1]['lat']},",end='')
+        print(f"'lng':{x[-1]['lng']},",end='')
+        sv = ccw_crossprod_normalized( 
+            (lat_start,lng_start), 
+            (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+            (x[-1]['lat'],x[-1]['lng']) 
+        )
+        print(f"'sort':{sv},",end='')
+        print("},")
+    print("]")
+    return isochron
+
+
+
+    ################
+    # Convex Hull: Positive side
+    while True:
+        max_xp = None
+        max_ndx = None
+        max_xp_w_dist = None
+        max_ndx_w_dist = None
+        max_d_w_dist = None
+        print(f"hull point={ (convex_hull[-1][-1]['lat'],convex_hull[-1][-1]['lng'])} mag:{convex_hull[-1][-1]['mag']}")
+        for ndx,x in enumerate(isochron):
+            xp = ccw_crossprod( (lat_start,lng_start),
+                                (convex_hull[-1][-1]['lat'],convex_hull[-1][-1]['lng']),
+                                (x[-1]['lat'],x[-1]['lng']) )
+            d = haversine_distance(convex_hull[-1][-1]['lat'],convex_hull[-1][-1]['lng'],
+                                    x[-1]['lat'],x[-1]['lng'])
+            print(f"       checking {(x[-1]['lat'],x[-1]['lng'])} d={d} xp={xp}",end='')
+            
+            if max_xp is None or xp > max_xp:
+                max_xp = xp
+                max_ndx = ndx
+                print(" max_xp",end='')
+            if d <= max_chull_segment_len and (max_xp_w_dist is None or xp > max_xp_w_dist):
+                max_xp_w_dist = xp
+                max_ndx_w_dist = ndx
+                max_d_w_dist = d
+                print(" max_xp_w_dist",end='')
+            print()
+        if max_xp <= 0 or max_xp is None:
+            print(f"no more positive points")
+            break # no positive point found, stop looking positive
+        if max_ndx_w_dist is not None:
+            # accept the point within the range "max_chull_segment_len"
+            p = isochron.pop(max_ndx_w_dist)
+            print(f"accepting ({p[-1]['lat'],p[-1]['lng']}) mag:{p[-1]['mag']}  dist={max_d_w_dist}")
+            convex_hull.append( p )
+        else:
+            # accept any point (true convex hull algorithm)
+            p = isochron.pop(max_ndx)
+            print(f"accepting ({p[-1]['lat'],p[-1]['lng']}) mag:{p[-1]['mag']}  ")
+            convex_hull.append( p )
+    # Negative side
+    while True:
+        min_xp = None
+        min_ndx = None
+        min_xp_w_dist = None
+        min_ndx_w_dist = None
+        min_d_w_dist = None
+        print(f"hull point={ (convex_hull[-1][-1]['lat'],convex_hull[-1][-1]['lng'])} mag:{convex_hull[-1][-1]['mag']}")
+        for ndx,x in enumerate(isochron):
+            xp = ccw_crossprod( (lat_start,lng_start),
+                                (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+                                (x[-1]['lat'],x[-1]['lng']) )
+            d = haversine_distance(convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'],
+                                    x[-1]['lat'],x[-1]['lng'])
+            print(f"       checking {(x[-1]['lat'],x[-1]['lng'])} d={d} xp={xp}",end='')
+            if min_xp is None or xp < min_xp:
+                min_xp = xp
+                min_ndx = ndx
+                print(" min_xp",end='')
+            if d <= max_chull_segment_len and (min_xp_w_dist is None or xp < min_xp_w_dist):
+                min_xp_w_dist = xp
+                min_ndx_w_dist = ndx
+                min_d_w_dist = d
+                print(" min_xp_w_dist",end='')
+            print()
+        if min_xp >= 0 or min_xp is None: 
+            print(f"no more negative points")
+            break # no negative point found, stop looking negative
+        if min_xp_w_dist is not None:
+            # accept the point within the range "max_chull_segment_len"
+            p = isochron.pop(min_ndx_w_dist)
+            print(f"accepting ({p[-1]['lat'],p[-1]['lng']}) mag:{p[-1]['mag']}  dist={min_d_w_dist}")
+            convex_hull.insert(0, p )
+        else:
+            # accept any point (true convex hull algorithm)
+            p = isochron.pop(min_ndx)
+            print(f"accepting ({p[-1]['lat'],p[-1]['lng']}) mag:{p[-1]['mag']} ")
+            convex_hull.insert(0, p )
+    
+    print(f"============= CONVEX HULL: end with {len(convex_hull)} routes")
+    return convex_hull        
+    
+
+
+
 def route_all_paths(waypoints_df, hour_offset=0, start_date=None, start_time=None, 
                         wind_data_dir=None,
                         gps_bounds=None, #[min_lat,max_lat,max_lng,min_lng]
@@ -711,12 +898,11 @@ def calculate_destination_latlng(lat, lon, speed_knots, direction, travel_time_h
 
 
 
-def get_parent_isochron_routes(isochrons, lat, lng, simulation_time):
+def get_parent_isochron_routes(isochron, lat, lng):
     parent_routes = []
-    if simulation_time > 0:
-        for route in isochrons[simulation_time-1]:
-            if route[-1]['lat']==lat and route[-1]['lng']==lng: continue # skip the path you took, it will always intersect
-            parent_routes.append(((route[-2]['lat'],route[-2]['lng']),(route[-1]['lat'],route[-1]['lng'])))
+    for route in isochron:
+        if route[-1]['lat']==lat and route[-1]['lng']==lng: continue # skip the path you took, it will always intersect
+        parent_routes.append(((route[-2]['lat'],route[-2]['lng']),(route[-1]['lat'],route[-1]['lng'])))
     return parent_routes
 
 def does_path_cross_parent_path(lat,lng, dlat, dlng, parent_isochron_routes):
@@ -757,6 +943,38 @@ def does_path_cross_boundary(lat, lng, dlat, dlng, boundaries):
                 return True
 
     return False
+
+
+
+def ccw_crossprod_normalized(p1, p2, p3):
+    """Compute the cross product of the angle formed between normalized vectors p1-p2 and p2-p3."""
+    # Compute vectors
+    v1 = (p2[0] - p1[0], p2[1] - p1[1])
+    v2 = (p3[0] - p2[0], p3[1] - p2[1])
+    
+    # Normalize vectors
+    mag_v1 = math.sqrt(v1[0]**2 + v1[1]**2)
+    mag_v2 = math.sqrt(v2[0]**2 + v2[1]**2)
+    if mag_v1 == 0 or mag_v2 == 0:
+        return 0
+        #raise ValueError("Cannot normalize a zero-length vector.")
+    
+    v1_normalized = (v1[0] / mag_v1, v1[1] / mag_v1)
+    v2_normalized = (v2[0] / mag_v2, v2[1] / mag_v2)
+    
+    # Compute cross product of normalized vectors
+    return v1_normalized[0] * v2_normalized[1] - v1_normalized[1] * v2_normalized[0]
+
+def ccw_crossprod(p1, p2, p3):
+    """ compute the cross product of the angle formed between p1-p2 and p2-p3"""
+    return (p2[0]-p1[0])*(p3[1]-p1[1]) - (p2[1]-p1[1])*(p3[0]-p1[0])
+
+def is_ccw(p1, p2, p3):
+    a = ccw_crossprod(p1, p2, p3)
+    if a>0: return -1
+    if a<0: return 1
+    return 0
+
 
 def lines_intersect(p1, p2, q1, q2):
     """Check if two line segments (p1-p2 and q1-q2) intersect."""
