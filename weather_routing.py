@@ -31,7 +31,7 @@ shore_boundaries=[
 
 def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_data_dir,
                        lat_start,lng_start,lat_end, lng_end, time_step_size,
-                       max_deviation_angle=90, max_turn_angle=120, max_chull_segment_len=1):
+                       max_deviation_angle=90, max_turn_angle=120, max_chull_segment_len=2.5):
     #print(parent_isochron)
     #return
     isochron=[]
@@ -90,17 +90,23 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
                     'date':FCdatetime_to_localtime(FCdate, FCtime,simulation_time+1),
                 })
                 isochron.append(traveled_path)
-    isochron.sort(key= lambda x: ccw_crossprod_normalized( (lat_start+1,lng_start), (lat_start,lng_start), (x[-1]['lat'],x[-1]['lng']) ))
-    # print("isochron = [")
-    # for x in isochron:
-    #     print("{",end='')
-    #     print(f"'lat':{x[-1]['lat']},",end='')
-    #     print(f"'lng':{x[-1]['lng']},",end='')
-    #     sv = ccw_crossprod_normalized( (lat_start+1,lng_start), (lat_start,lng_start), (x[-1]['lat'],x[-1]['lng']) )
-    #     print(f"'sort':{sv},",end='')
-    #     print("},")
-    # print("]")
-    # return isochron
+
+    min_dtw = min(isochron, key=lambda x:x[-1]['dtw'])
+    #isochron.sort(key= lambda x: ccw_crossprod_normalized( (lat_start,lng_start), (min_dtw[-1]['lat'],min_dtw[-1]['lng']), (x[-1]['lat'],x[-1]['lng']) ))
+    isochron.sort(key= lambda x: ccw_crossprod_normalized(  (min_dtw[-1]['lat'],min_dtw[-1]['lng']), (lat_start,lng_start), (x[-1]['lat'],x[-1]['lng']) ))
+    print("isochron = [")
+    for x in isochron:
+        print("{",end='')
+        print(f"'lat':{x[-1]['lat']:.3f},",end='')
+        print(f"'lng':{x[-1]['lng']:.3f},",end='')
+        print(f"'mag':{x[-1]['mag']:.3f},",end='')
+        print(f"'dtw':{x[-1]['dtw']:.3f},",end='')
+        sv = ccw_crossprod_normalized( (lat_start,lng_start), (min_dtw[-1]['lat'],min_dtw[-1]['lng']), (x[-1]['lat'],x[-1]['lng']) )
+        #sv = ccw_crossprod_normalized(  (min_dtw[-1]['lat'],min_dtw[-1]['lng']), (lat_start,lng_start), (x[-1]['lat'],x[-1]['lng']) )
+        print(f"'xp':{sv:.3f},",end='')
+        print("},")
+    print("]")
+    #return isochron
     ################
     # find the convex hull to represent the isochron
     print(f"============= CONVEX HULL: start with {len(isochron)} routes")
@@ -109,28 +115,45 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
     convex_hull.append(min(isochron, key=lambda x:x[-1]['dtw']))
     isochron = [item for item in isochron if item != convex_hull[0]]
     print(f"min_dtw point: ({(convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'])}) mag:{convex_hull[0][-1]['mag']}")
-    isochron.sort(key= lambda x: ccw_crossprod_normalized( 
-        (lat_start,lng_start), 
-        (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
-        (x[-1]['lat'],x[-1]['lng']) 
-    ))
-    print("isochron = [")
-    for x in [*isochron, *convex_hull]:
-        print("{",end='')
-        print(f"'lat':{x[-1]['lat']},",end='')
-        print(f"'lng':{x[-1]['lng']},",end='')
-        sv = ccw_crossprod_normalized( 
-            (lat_start,lng_start), 
-            (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
-            (x[-1]['lat'],x[-1]['lng']) 
-        )
-        print(f"'sort':{sv},",end='')
-        print("},")
-    print("]")
-    return isochron
+    ################
+    # isochron.sort(key= lambda x: ccw_crossprod_normalized( 
+    #     (lat_start,lng_start), 
+    #     (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+    #     (x[-1]['lat'],x[-1]['lng']) 
+    # ))
+    # print("isochron = [")
+    # for x in [*isochron, *convex_hull]:
+    #     print("{",end='')
+    #     print(f"'lat':{x[-1]['lat']},",end='')
+    #     print(f"'lng':{x[-1]['lng']},",end='')
+    #     sv = ccw_crossprod_normalized( 
+    #         (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+    #         (lat_start,lng_start), 
+    #         (x[-1]['lat'],x[-1]['lng']) 
+    #     )
+    #     print(f"'sort':{sv},",end='')
+    #     print("},")
+    # print("]")
+    # return sorted([*isochron, *convex_hull], key=lambda x:ccw_crossprod_normalized( 
+    #         (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+    #         (lat_start,lng_start), 
+    #         (x[-1]['lat'],x[-1]['lng']) 
+    #     ))
+    ################
+    # first pass, sort all points into positive and negative sides, 
+    positive_side = []
+    negative_side = []
+    for ndx,x in enumerate(isochron):
+        xp = ccw_crossprod_normalized( 
+                        (lat_start,lng_start),
+                        (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+                        (x[-1]['lat'],x[-1]['lng']) )
+        if xp > 0:
+            positive_side.append(x)
+        else:
+            negative_side.append(x)
 
-
-
+    #TODO: first positive and negative segments are O(1) here
     ################
     # Convex Hull: Positive side
     while True:
@@ -140,14 +163,21 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
         max_ndx_w_dist = None
         max_d_w_dist = None
         print(f"hull point={ (convex_hull[-1][-1]['lat'],convex_hull[-1][-1]['lng'])} mag:{convex_hull[-1][-1]['mag']}")
-        for ndx,x in enumerate(isochron):
-            xp = ccw_crossprod( (lat_start,lng_start),
+        #positive_side_keep=[]
+        for ndx,x in enumerate(positive_side):
+            xp = ccw_crossprod_normalized( 
+                                (lat_start,lng_start),
                                 (convex_hull[-1][-1]['lat'],convex_hull[-1][-1]['lng']),
                                 (x[-1]['lat'],x[-1]['lng']) )
+            # if xp > 0:
+            #     positive_side_keep.append(x)
+            # else:
+            #     print(f"       skipping-removing {(x[-1]['lat'],x[-1]['lng'])} xp={xp}")
+            #     continue
             d = haversine_distance(convex_hull[-1][-1]['lat'],convex_hull[-1][-1]['lng'],
                                     x[-1]['lat'],x[-1]['lng'])
-            print(f"       checking {(x[-1]['lat'],x[-1]['lng'])} d={d} xp={xp}",end='')
-            
+            print(f"       checking {(x[-1]['lat'],x[-1]['lng'])} d={d} xp={xp} mag={x[-1]['mag']}",end='')
+
             if max_xp is None or xp > max_xp:
                 max_xp = xp
                 max_ndx = ndx
@@ -163,14 +193,15 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
             break # no positive point found, stop looking positive
         if max_ndx_w_dist is not None:
             # accept the point within the range "max_chull_segment_len"
-            p = isochron.pop(max_ndx_w_dist)
+            p = positive_side.pop(max_ndx_w_dist)
             print(f"accepting ({p[-1]['lat'],p[-1]['lng']}) mag:{p[-1]['mag']}  dist={max_d_w_dist}")
             convex_hull.append( p )
         else:
             # accept any point (true convex hull algorithm)
-            p = isochron.pop(max_ndx)
+            p = positive_side.pop(max_ndx)
             print(f"accepting ({p[-1]['lat'],p[-1]['lng']}) mag:{p[-1]['mag']}  ")
             convex_hull.append( p )
+
     # Negative side
     while True:
         min_xp = None
@@ -179,9 +210,10 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
         min_ndx_w_dist = None
         min_d_w_dist = None
         print(f"hull point={ (convex_hull[-1][-1]['lat'],convex_hull[-1][-1]['lng'])} mag:{convex_hull[-1][-1]['mag']}")
-        for ndx,x in enumerate(isochron):
-            xp = ccw_crossprod( (lat_start,lng_start),
+        for ndx,x in enumerate(negative_side):
+            xp = ccw_crossprod_normalized( 
                                 (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+                                (lat_start,lng_start),
                                 (x[-1]['lat'],x[-1]['lng']) )
             d = haversine_distance(convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'],
                                     x[-1]['lat'],x[-1]['lng'])
@@ -190,23 +222,23 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
                 min_xp = xp
                 min_ndx = ndx
                 print(" min_xp",end='')
-            if d <= max_chull_segment_len and (min_xp_w_dist is None or xp < min_xp_w_dist):
-                min_xp_w_dist = xp
-                min_ndx_w_dist = ndx
-                min_d_w_dist = d
-                print(" min_xp_w_dist",end='')
+            # if d <= max_chull_segment_len and (min_xp_w_dist is None or xp < min_xp_w_dist):
+            #     min_xp_w_dist = xp
+            #     min_ndx_w_dist = ndx
+            #     min_d_w_dist = d
+            #     print(" min_xp_w_dist",end='')
             print()
         if min_xp >= 0 or min_xp is None: 
             print(f"no more negative points")
             break # no negative point found, stop looking negative
         if min_xp_w_dist is not None:
             # accept the point within the range "max_chull_segment_len"
-            p = isochron.pop(min_ndx_w_dist)
+            p = negative_side.pop(min_ndx_w_dist)
             print(f"accepting ({p[-1]['lat'],p[-1]['lng']}) mag:{p[-1]['mag']}  dist={min_d_w_dist}")
             convex_hull.insert(0, p )
         else:
             # accept any point (true convex hull algorithm)
-            p = isochron.pop(min_ndx)
+            p = negative_side.pop(min_ndx)
             print(f"accepting ({p[-1]['lat'],p[-1]['lng']}) mag:{p[-1]['mag']} ")
             convex_hull.insert(0, p )
     
