@@ -50,7 +50,7 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
     ]]
     
     simulation_time = 0
-    max_step_debug = 10
+    max_step_debug = 6
     for wp_ndx in range(1,len(waypoints)):
         n_steps = 0
         print(f"========== routing to waypoint {wp_ndx} ===========")
@@ -63,7 +63,7 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
         ###
         while not found_wp:
             n_steps +=1
-            if n_steps > max_step_debug:
+            if wp_ndx>1 and n_steps > max_step_debug:
                 print(f"n_steps={n_steps} > max_step_debug={max_step_debug}")
                 return isochrons
             simulation_time += 1
