@@ -29,6 +29,82 @@ shore_boundaries=[
 
 
 
+
+
+
+
+def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_step_size = 1):
+    """ Weather routing with isochrons """
+    (FCdate, FCtime,_) = get_grib_time(start_date, start_time)               
+
+    isochrons=[[
+        [{  #start
+            'lat': waypoints.iloc[0]['lat'],
+            'lng': waypoints.iloc[0]['lng'],
+            'date': FCdatetime_to_localtime(FCdate, FCtime,0),
+            'dtw' : haversine_distance(
+                        waypoints.iloc[0]['lat'],waypoints.iloc[0]['lng'],
+                        waypoints.iloc[1]['lat'],waypoints.iloc[1]['lng']), #Distance to Waypoint
+            'tdt' : 0, #total distance travled
+        }]
+    ]]
+    
+    simulation_time = 0
+    max_step_debug = 10
+    for wp_ndx in range(1,len(waypoints)):
+        n_steps = 0
+        print(f"========== routing to waypoint {wp_ndx} ===========")
+        lat_start = waypoints.iloc[wp_ndx-1]['lat']
+        lng_start = waypoints.iloc[wp_ndx-1]['lng']
+        lat_end = waypoints.iloc[wp_ndx]['lat']
+        lng_end = waypoints.iloc[wp_ndx]['lng']
+    
+        found_wp = False
+        ###
+        while not found_wp:
+            n_steps +=1
+            if n_steps > max_step_debug:
+                print(f"n_steps={n_steps} > max_step_debug={max_step_debug}")
+                return isochrons
+            simulation_time += 1
+            print(f"Calculating simulation_time={simulation_time}")
+            convex_hull = take_isochron_step(
+                    isochrons[simulation_time-1], simulation_time-1, FCdate, FCtime, 
+                    wind_data_dir,lat_start,lng_start,lat_end, lng_end, time_step_size) 
+            isochrons.append(convex_hull)
+            ####
+            min_route = None
+            for route in convex_hull:
+                #print(route[-1])
+                if min_route is None or route[-1]['dtw'] < min_route[-1]['dtw']:
+                    min_route = route
+            print(f"  dtw={min_route[-1]['dtw']:.3f} sog={min_route[-1]['sog']:.3f}", end='')
+            if min_route[-1]['dtw'] < min_route[-1]['sog']:
+                found_wp = True
+                print(" === found waypoint",end='')
+                ###
+                # add a partial step to the min_route
+                min_route.append(
+                    {
+                        'lat':lat_end,
+                        'lng':lng_end,
+                        'mag':min_route[-1]['mag'],
+                        'sog':min_route[-1]['sog'],
+                        'dtw':0,
+                        'twa':0,
+                        'tdt':min_route[-1]['tdt']+min_route[-1]['dtw'],
+                        'date':FCdatetime_to_localtime(FCdate, FCtime,simulation_time),
+                    }
+                )
+                isochrons.append([min_route])
+                ###
+            print()
+    ####
+    return isochrons
+
+
+
+
 def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_data_dir,
                        lat_start,lng_start,lat_end, lng_end, time_step_size,
                        max_deviation_angle=90, max_turn_angle=120, max_chull_segment_len=2.5):
