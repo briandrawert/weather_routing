@@ -72,9 +72,7 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
             print(f"Calculating simulation_time={simulation_time}")
             convex_hull = take_isochron_step(
                     isochrons[simulation_time-1], simulation_time-1, FCdate, FCtime, 
-                    wind_data_dir,lat_start,lng_start,lat_end, lng_end, time_step_size,
-                    max_chull_segment_len=10,
-                    max_deviation_angle=45) 
+                    wind_data_dir,lat_start,lng_start,lat_end, lng_end, time_step_size) 
             isochrons.append(convex_hull)
             ####
             min_route = None
