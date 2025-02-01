@@ -27,7 +27,8 @@ shore_boundaries=[
     ]
 ]
 
-
+class OutOfBoundsException(Exception):
+    pass
 
 
 
@@ -50,7 +51,7 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
     ]]
     
     simulation_time = 0
-    max_step_debug = 6
+    max_step_debug = 25
     for wp_ndx in range(1,len(waypoints)):
         n_steps = 0
         print(f"========== routing to waypoint {wp_ndx} ===========")
@@ -67,10 +68,13 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
                 print(f"n_steps={n_steps} > max_step_debug={max_step_debug}")
                 return isochrons
             simulation_time += 1
+            tic = time.time()
             print(f"Calculating simulation_time={simulation_time}")
             convex_hull = take_isochron_step(
                     isochrons[simulation_time-1], simulation_time-1, FCdate, FCtime, 
-                    wind_data_dir,lat_start,lng_start,lat_end, lng_end, time_step_size) 
+                    wind_data_dir,lat_start,lng_start,lat_end, lng_end, time_step_size,
+                    max_chull_segment_len=10,
+                    max_deviation_angle=45) 
             isochrons.append(convex_hull)
             ####
             min_route = None
@@ -78,7 +82,7 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
                 #print(route[-1])
                 if min_route is None or route[-1]['dtw'] < min_route[-1]['dtw']:
                     min_route = route
-            print(f"  dtw={min_route[-1]['dtw']:.3f} sog={min_route[-1]['sog']:.3f}", end='')
+            print(f"  dtw={min_route[-1]['dtw']:.3f} sog={min_route[-1]['sog']:.3f} #routes={len(convex_hull)} time={time.time()-tic:.2f}" , end='')
             if min_route[-1]['dtw'] < min_route[-1]['sog']:
                 found_wp = True
                 print(" === found waypoint",end='')
@@ -118,7 +122,11 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
         ###
         wind_data = load_historical_gfs_forecast(wind_data_dir, grib_file_date, 
                                                           grib_file_time, hr_offset)
-        (tws, twd) = get_wind_at_location_from_data(wind_data, lat, lng)
+        try:
+            (tws, twd) = get_wind_at_location_from_data(wind_data, lat, lng)
+        except OutOfBoundsException:
+            print(f"OutOfBoundsException {lat},{lng}")
+            continue
         polars = polar_rhiannon(tws)
         parent_isochron_routes = get_parent_isochron_routes(parent_isochron,lat,lng)
         ###
@@ -750,7 +758,7 @@ def get_wind_at_location_from_data(wind_data, mylat, mylng, verbose=False):
             found_lng=True
             break
     if not found_lat or not found_lng:
-        raise Exception("could not find index for lat or long")
+        raise OutOfBoundsException("could not find index for lat or long")
     ndx_n = lat_ndx
     ndx_s = lat_ndx-1
     ndx_w = lng_ndx
