@@ -10,6 +10,7 @@ import math
 import pygrib
 import pickle
 import copy
+import numpy
 
 shore_boundaries=[
   [ (33.72042, -118.20665), #Long breach, PV
@@ -240,42 +241,91 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
             #print(f"  accepting ({p[-1]['lat']:.3f},{p[-1]['lng']:.3f}) mag:{p[-1]['mag']:.3f}  ")
             convex_hull.append( p )
 
+    # # Negative side
+    # while True:
+    #     max_xp = None
+    #     max_ndx = None
+    #     max_xp_w_dist = None
+    #     max_ndx_w_dist = None
+    #     max_d_w_dist = None
+    #     #print(f"hull point={ (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'])} mag:{convex_hull[0][-1]['mag']}")
+    #     for ndx,x in enumerate(negative_side):
+    #         xp = ccw_crossprod_normalized( 
+    #                             (lat_start,lng_start),
+    #                             (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+    #                             (x[-1]['lat'],x[-1]['lng']) )
+    #         if xp >= 0:
+    #             #print(f"       skipping {(x[-1]['lat'],x[-1]['lng'])} xp={xp}")
+    #             continue
+    #         ### Flip the sign of the cross product
+    #         xp = -1 * xp
+    #         ###
+    #         d = haversine_distance(convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'],
+    #                                 x[-1]['lat'],x[-1]['lng'])
+    #         #print(f"       checking ({x[-1]['lat']:.3f},{x[-1]['lng']:.3f}) d={d:.3f} xp={xp:.3f} mag={x[-1]['mag']:.3f}",end='')
+    #         if max_xp is None or xp > max_xp:
+    #             max_xp = xp
+    #             max_ndx = ndx
+    #             #print(" max_xp",end='')
+    #         if d <= max_chull_segment_len and (max_xp_w_dist is None or xp < max_xp_w_dist):
+    #             max_xp_w_dist = xp
+    #             max_ndx_w_dist = ndx
+    #             max_d_w_dist = d
+    #             #print(" max_xp_w_dist",end='')
+    #         #print()
+    #     if max_xp is None or max_xp <= 0: 
+    #         #print(f"  no more negative points")
+    #         break # no negative point found, stop looking negative
+    #     if max_xp_w_dist is not None:
+    #         # accept the point within the range "max_chull_segment_len"
+    #         p = negative_side.pop(max_ndx_w_dist)
+    #         #print(f"  accepting ({p[-1]['lat']:.3f},{p[-1]['lng']:.3f}) mag:{p[-1]['mag']:.3f}  dist={max_d_w_dist}")
+    #         convex_hull.insert(0, p )
+    #     else:
+    #         # accept any point (true convex hull algorithm)
+    #         p = negative_side.pop(max_ndx)
+    #         #print(f"  accepting ({p[-1]['lat']:.3f},{p[-1]['lng']:.3f}) mag:{p[-1]['mag']:.3f}  ")
+    #         convex_hull.insert(0, p )
+
     # Negative side
     while True:
-        max_xp = None
+        max_angle = None
         max_ndx = None
-        max_xp_w_dist = None
+        max_angle_w_dist = None
         max_ndx_w_dist = None
         max_d_w_dist = None
         #print(f"hull point={ (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'])} mag:{convex_hull[0][-1]['mag']}")
         for ndx,x in enumerate(negative_side):
-            xp = ccw_crossprod_normalized( 
+            xp = ccw_crossprod( 
                                 (lat_start,lng_start),
                                 (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
                                 (x[-1]['lat'],x[-1]['lng']) )
             if xp >= 0:
                 #print(f"       skipping {(x[-1]['lat'],x[-1]['lng'])} xp={xp}")
                 continue
-            ### Flip the sign of the cross product
-            xp = -1 * xp
+
+            angle = angle_between_segments((lat_start,lng_start),
+                                (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
+                                (x[-1]['lat'],x[-1]['lng']) )
+
             ###
             d = haversine_distance(convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'],
                                     x[-1]['lat'],x[-1]['lng'])
             #print(f"       checking ({x[-1]['lat']:.3f},{x[-1]['lng']:.3f}) d={d:.3f} xp={xp:.3f} mag={x[-1]['mag']:.3f}",end='')
-            if max_xp is None or xp > max_xp:
-                max_xp = xp
+            if max_angle is None or angle > max_angle:
+                max_angle = angle
                 max_ndx = ndx
                 #print(" max_xp",end='')
-            if d <= max_chull_segment_len and (max_xp_w_dist is None or xp < max_xp_w_dist):
-                max_xp_w_dist = xp
+            if d <= max_chull_segment_len and (max_angle_w_dist is None or angle < max_angle_w_dist):
+                max_angle_w_dist = angle
                 max_ndx_w_dist = ndx
                 max_d_w_dist = d
                 #print(" max_xp_w_dist",end='')
             #print()
-        if max_xp is None or max_xp <= 0: 
+        if max_angle is None or max_angle <= 0: 
             #print(f"  no more negative points")
             break # no negative point found, stop looking negative
-        if max_xp_w_dist is not None:
+        if max_angle_w_dist is not None:
             # accept the point within the range "max_chull_segment_len"
             p = negative_side.pop(max_ndx_w_dist)
             #print(f"  accepting ({p[-1]['lat']:.3f},{p[-1]['lng']:.3f}) mag:{p[-1]['mag']:.3f}  dist={max_d_w_dist}")
@@ -285,6 +335,8 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
             p = negative_side.pop(max_ndx)
             #print(f"  accepting ({p[-1]['lat']:.3f},{p[-1]['lng']:.3f}) mag:{p[-1]['mag']:.3f}  ")
             convex_hull.insert(0, p )
+
+
     
     #print(f"============= CONVEX HULL: end with {len(convex_hull)} routes")
     return convex_hull
@@ -1050,6 +1102,22 @@ def is_ccw(p1, p2, p3):
     if a>0: return -1
     if a<0: return 1
     return 0
+
+
+def angle_between_segments(p1, p2, p3):
+    def latlon_to_cartesian(lat, lon):
+        lat, lon = numpy.radians(lat), numpy.radians(lon)
+        x = numpy.cos(lat) * numpy.cos(lon)
+        y = numpy.cos(lat) * numpy.sin(lon)
+        z = numpy.sin(lat)
+        return numpy.array([x, y, z])
+    v1 = latlon_to_cartesian(*p1) - latlon_to_cartesian(*p2)
+    v2 = latlon_to_cartesian(*p3) - latlon_to_cartesian(*p2)
+    
+    cos_angle = numpy.dot(v1, v2) / (numpy.linalg.norm(v1) * numpy.linalg.norm(v2))
+    cos_angle = numpy.clip(cos_angle, -1.0, 1.0)  # Avoid numerical errors
+    
+    return numpy.degrees(numpy.arccos(cos_angle))
 
 
 def lines_intersect(p1, p2, q1, q2):
