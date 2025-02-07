@@ -35,7 +35,7 @@ class OutOfBoundsException(Exception):
 
 
 
-def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_step_size = 1):
+def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_step_size = 1, max_step_debug = None):
     """ Weather routing with isochrons """
     (FCdate, FCtime,_) = get_grib_time(start_date, start_time)               
 
@@ -52,57 +52,63 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
     ]]
     
     simulation_time = 0
-    max_step_debug = 25
-    for wp_ndx in range(1,len(waypoints)):
-        n_steps = 0
-        print(f"========== routing to waypoint {wp_ndx} ===========")
-        lat_start = waypoints.iloc[wp_ndx-1]['lat']
-        lng_start = waypoints.iloc[wp_ndx-1]['lng']
-        lat_end = waypoints.iloc[wp_ndx]['lat']
-        lng_end = waypoints.iloc[wp_ndx]['lng']
-    
-        found_wp = False
-        ###
-        while not found_wp:
-            n_steps +=1
-            if wp_ndx>1 and n_steps > max_step_debug:
-                print(f"n_steps={n_steps} > max_step_debug={max_step_debug}")
-                return isochrons
-            simulation_time += 1
-            tic = time.time()
-            print(f"Calculating simulation_time={simulation_time}")
-            convex_hull = take_isochron_step(
-                    isochrons[simulation_time-1], simulation_time-1, FCdate, FCtime, 
-                    wind_data_dir,lat_start,lng_start,lat_end, lng_end, time_step_size) 
-            isochrons.append(convex_hull)
-            ####
-            min_route = None
-            for route in convex_hull:
-                #print(route[-1])
-                if min_route is None or route[-1]['dtw'] < min_route[-1]['dtw']:
-                    min_route = route
-            print(f"  dtw={min_route[-1]['dtw']:.3f} sog={min_route[-1]['sog']:.3f} #routes={len(convex_hull)} time={time.time()-tic:.2f}" , end='')
-            if min_route[-1]['dtw'] < min_route[-1]['sog']:
-                found_wp = True
-                print(" === found waypoint",end='')
-                ###
-                # add a partial step to the min_route
-                min_route.append(
-                    {
-                        'lat':lat_end,
-                        'lng':lng_end,
-                        'mag':min_route[-1]['mag'],
-                        'sog':min_route[-1]['sog'],
-                        'dtw':0,
-                        'twa':0,
-                        'tdt':min_route[-1]['tdt']+min_route[-1]['dtw'],
-                        'date':FCdatetime_to_localtime(FCdate, FCtime,simulation_time),
-                    }
-                )
-                isochrons.append([min_route])
-                ###
-            print()
-    ####
+    tic = time.time()
+    try:
+        
+        for wp_ndx in range(1,len(waypoints)):
+            n_steps = 0
+            print(f"========== routing to waypoint {wp_ndx} ===========")
+            lat_start = waypoints.iloc[wp_ndx-1]['lat']
+            lng_start = waypoints.iloc[wp_ndx-1]['lng']
+            lat_end = waypoints.iloc[wp_ndx]['lat']
+            lng_end = waypoints.iloc[wp_ndx]['lng']
+        
+            found_wp = False
+            ###
+            while not found_wp:
+                n_steps +=1
+                if max_step_debug is not None and wp_ndx>1 and n_steps > max_step_debug:
+                    print(f"n_steps={n_steps} > max_step_debug={max_step_debug}")
+                    return isochrons
+                simulation_time += 1
+                tic = time.time()
+                #print(f"Calculating simulation_time={simulation_time}")
+                convex_hull = take_isochron_step(
+                        isochrons[simulation_time-1], simulation_time-1, FCdate, FCtime, 
+                        wind_data_dir,lat_start,lng_start,lat_end, lng_end, time_step_size) 
+                isochrons.append(convex_hull)
+                ####
+                min_route = None
+                for route in convex_hull:
+                    #print(route[-1])
+                    if min_route is None or route[-1]['dtw'] < min_route[-1]['dtw']:
+                        min_route = route
+                print(f"t={simulation_time} dtw={min_route[-1]['dtw']:.3f} sog={min_route[-1]['sog']:.3f} #routes={len(convex_hull)} time={time.time()-tic:.2f}" , end='')
+                if min_route[-1]['dtw'] < min_route[-1]['sog']:
+                    found_wp = True
+                    print(" === found waypoint",end='')
+                    ###
+                    # add a partial step to the min_route
+                    min_route.append(
+                        {
+                            'lat':lat_end,
+                            'lng':lng_end,
+                            'mag':min_route[-1]['mag'],
+                            'sog':min_route[-1]['sog'],
+                            'dtw':0,
+                            'twa':0,
+                            'tdt':min_route[-1]['tdt']+min_route[-1]['dtw'],
+                            'date':FCdatetime_to_localtime(FCdate, FCtime,simulation_time),
+                        }
+                    )
+                    isochrons.append([min_route])
+                    ###
+                print()
+        ####
+    except Exception as e:
+        print("Caught Exception {e}")
+        traceback.print_exc()
+    print(f"total compute time={time.time()-tic:.2f}s")
     return isochrons
 
 
@@ -110,7 +116,8 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
 
 def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_data_dir,
                        lat_start,lng_start,lat_end, lng_end, time_step_size,
-                       max_deviation_angle=90, max_turn_angle=120, max_chull_segment_len=2.5):
+                       max_deviation_angle=90, max_turn_angle=120, max_chull_segment_len=2.5,
+                       show_outofboundsexceptions=False):
     isochron=[]
     (grib_file_date, grib_file_time, hr_offset) = get_grib_time(FCdate, FCtime, simulation_time)
     min_dtw = None
@@ -124,7 +131,8 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
         try:
             (tws, twd) = get_wind_at_location_from_data(wind_data, lat, lng)
         except OutOfBoundsException:
-            print(f"OutOfBoundsException {lat},{lng}")
+            if show_outofboundsexceptions:
+                print(f"OutOfBoundsException {lat},{lng}")
             continue
         polars = polar_rhiannon(tws)
         parent_isochron_routes = get_parent_isochron_routes(parent_isochron,lat,lng)
@@ -151,12 +159,12 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
                 (dlat,dlng) = calculate_destination_latlng(lat,lng,boat_speed,boat_mag,time_step_size) # hour
                 dist_traveled = time_step_size * boat_speed
                 ##
-                if does_path_cross_boundary(lat, lng, dlat, dlng, shore_boundaries):
-                    #print(f"    mag {boat_mag} crosses land")
-                    continue
-                if does_path_cross_parent_path(lat,lng, dlat, dlng, parent_isochron_routes):
-                    #print(f"    mag {boat_mag} crosses parent route")
-                    continue
+                #if does_path_cross_boundary(lat, lng, dlat, dlng, shore_boundaries):
+                #    #print(f"    mag {boat_mag} crosses land")
+                #    continue
+                #if does_path_cross_parent_path(lat,lng, dlat, dlng, parent_isochron_routes):
+                #    #print(f"    mag {boat_mag} crosses parent route")
+                #    continue
                 # save the path
                 #print(f"mag {boat_mag} ({lat},{lng}) ({dlat},{dlng})")
                 traveled_path = copy.copy(past_traveled_path)
@@ -241,51 +249,6 @@ def take_isochron_step(parent_isochron, simulation_time, FCdate, FCtime, wind_da
             #print(f"  accepting ({p[-1]['lat']:.3f},{p[-1]['lng']:.3f}) mag:{p[-1]['mag']:.3f}  ")
             convex_hull.append( p )
 
-    # # Negative side
-    # while True:
-    #     max_xp = None
-    #     max_ndx = None
-    #     max_xp_w_dist = None
-    #     max_ndx_w_dist = None
-    #     max_d_w_dist = None
-    #     #print(f"hull point={ (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'])} mag:{convex_hull[0][-1]['mag']}")
-    #     for ndx,x in enumerate(negative_side):
-    #         xp = ccw_crossprod_normalized( 
-    #                             (lat_start,lng_start),
-    #                             (convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng']),
-    #                             (x[-1]['lat'],x[-1]['lng']) )
-    #         if xp >= 0:
-    #             #print(f"       skipping {(x[-1]['lat'],x[-1]['lng'])} xp={xp}")
-    #             continue
-    #         ### Flip the sign of the cross product
-    #         xp = -1 * xp
-    #         ###
-    #         d = haversine_distance(convex_hull[0][-1]['lat'],convex_hull[0][-1]['lng'],
-    #                                 x[-1]['lat'],x[-1]['lng'])
-    #         #print(f"       checking ({x[-1]['lat']:.3f},{x[-1]['lng']:.3f}) d={d:.3f} xp={xp:.3f} mag={x[-1]['mag']:.3f}",end='')
-    #         if max_xp is None or xp > max_xp:
-    #             max_xp = xp
-    #             max_ndx = ndx
-    #             #print(" max_xp",end='')
-    #         if d <= max_chull_segment_len and (max_xp_w_dist is None or xp < max_xp_w_dist):
-    #             max_xp_w_dist = xp
-    #             max_ndx_w_dist = ndx
-    #             max_d_w_dist = d
-    #             #print(" max_xp_w_dist",end='')
-    #         #print()
-    #     if max_xp is None or max_xp <= 0: 
-    #         #print(f"  no more negative points")
-    #         break # no negative point found, stop looking negative
-    #     if max_xp_w_dist is not None:
-    #         # accept the point within the range "max_chull_segment_len"
-    #         p = negative_side.pop(max_ndx_w_dist)
-    #         #print(f"  accepting ({p[-1]['lat']:.3f},{p[-1]['lng']:.3f}) mag:{p[-1]['mag']:.3f}  dist={max_d_w_dist}")
-    #         convex_hull.insert(0, p )
-    #     else:
-    #         # accept any point (true convex hull algorithm)
-    #         p = negative_side.pop(max_ndx)
-    #         #print(f"  accepting ({p[-1]['lat']:.3f},{p[-1]['lng']:.3f}) mag:{p[-1]['mag']:.3f}  ")
-    #         convex_hull.insert(0, p )
 
     # Negative side
     while True:
@@ -698,22 +661,78 @@ def FCdatetime_to_localtime(FCdate,FCtime, hr_offset=0):
     return dt_local
 
 def load_historical_gfs_forecast(wind_data_dir, grib_date, grib_time, hr_offset):
+    grib_file = f"{wind_data_dir}/{grib_date}-{grib_time:02}-gfs.t{grib_time:02}z.pgrb2.0p25.f{hr_offset:03}"
     pkl_file = f"{wind_data_dir}/{grib_date}-{grib_time:02}-gfs.0p25.f{hr_offset:03}.pkl"
-    if not os.path.isfile(pkl_file):
+    if os.path.isfile(pkl_file):
         raise Exception(f"PKL file not found:'{pkl_file}'")
-    with open(pkl_file, 'rb') as fd:
-        wind_data = pickle.load(fd)
-    return wind_data
+        with open(pkl_file, 'rb') as fd:
+            return pickle.load(fd)
+    if os.path.isfile(grib_file):
+        return load_historical_gfs_grib_file(grib_file,hr_offset)
+
+def load_historical_gfs_grib_file(grib_file, simulation_time):
+    # transpack gps boundaries
+    min_lat = 21.1
+    max_lat = 34.1
+    max_lng = -118
+    min_lng = -158
+
+
+    max_lat_ndx = None
+    min_lat_ndx = None
+    max_lng_ndx = None
+    min_lng_ndx = None
+    with pygrib.open(grib_file) as grbs:
+        u_msg = grbs.select(name="10 metre U wind component", level=10, forecastTime=simulation_time)[0].values
+        v_msg = grbs.select(name="10 metre V wind component", level=10, forecastTime=simulation_time)[0].values
+        lats, lngs = grbs[1].latlons()
+    
+        
+        sub_array = {}
+        if max_lat_ndx is None:
+            #print("calcuating bounds")
+            #print(f"min_lat={min_lat}")
+            #print(f"max_lat={max_lat}")
+            for lat_ndx in range(0, lats.shape[0]):
+                #print(lat_ndx, lats[lat_ndx][0])
+                if min_lat_ndx is None and lats[lat_ndx][0] <= max_lat:
+                    min_lat_ndx = lat_ndx-1
+                    #print(f"min_lat_ndx={min_lat_ndx} lat={lats[min_lat_ndx][0]}")
+                if max_lat_ndx is None and lats[lat_ndx][0] <= min_lat:
+                    max_lat_ndx = lat_ndx
+                    #print(f"max_lat_ndx={max_lat_ndx} lat={lats[max_lat_ndx][0]}")
+        
+                    break
+            min_lng = min_lng if min_lng>0 else min_lng+360
+            max_lng = max_lng if max_lng>0 else max_lng+360
+            #print(f"min_lng={min_lng}")
+            #print(f"max_lng={max_lng}")
+            
+            for lng_ndx in range(0, lngs.shape[1]):
+                #print(lng_ndx, lngs[0][lng_ndx])
+                if min_lng_ndx is None and lngs[0][lng_ndx] >= min_lng:
+                    min_lng_ndx = lng_ndx-1
+                    #print(f"min_lng_ndx={min_lng_ndx} lng={lngs[0][min_lng_ndx]}")
+                if max_lng_ndx is None and lngs[0][lng_ndx] >= max_lng:
+                    max_lng_ndx = lng_ndx
+                    #print(f"max_lng_ndx={max_lng_ndx} lng={lngs[0][max_lng_ndx]}")
+    
+        sub_array['lats']  = lats[min_lat_ndx:max_lat_ndx, min_lng_ndx:max_lng_ndx]
+        sub_array['lngs']  = lngs[min_lat_ndx:max_lat_ndx, min_lng_ndx:max_lng_ndx]
+        sub_array['u_msg'] = u_msg[min_lat_ndx:max_lat_ndx, min_lng_ndx:max_lng_ndx]
+        sub_array['v_msg'] = v_msg[min_lat_ndx:max_lat_ndx, min_lng_ndx:max_lng_ndx]
+        
+        return sub_array
 
 
 # docs here: https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25_1hr
 
 def download_nomads_gfs_forecast_file(grib_date, grib_time, lat_bounds, lng_bounds, simulation_time):
-    min_lng = lng_bounds[0] if lng_bounds[0]>0 else lng_bounds[0]+360
-    max_lng = lng_bounds[1] if lng_bounds[1]>0 else lng_bounds[1]+360
-    #print(min_lng,max_lng)
-    min_lat = lat_bounds[0]
-    max_lat = lat_bounds[1]
+    min_lng = math.floor(lng_bounds[0]) if lng_bounds[0]>0 else math.floor(lng_bounds[0]+360)
+    max_lng = math.ceil(lng_bounds[1]) if lng_bounds[1]>0 else math.ceil(lng_bounds[1]+360)
+    min_lat = math.floor(lat_bounds[0])
+    max_lat = math.ceil(lat_bounds[1])
+
     #https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl?dir=%2Fgfs.20241203%2F12%2Fatmos&file=gfs.t12z.pgrb2.0p25.f240&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on&subregion=&toplat=34.5&leftlon=238&rightlon=244&bottomlat=32
     url = f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl?dir=%2Fgfs.{grib_date}%2F{grib_time}%2Fatmos&file=gfs.t{grib_time}z.pgrb2.0p25.f{simulation_time:03}&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on&subregion=&toplat={max_lat}&leftlon={min_lng}&rightlon={max_lng}&bottomlat={min_lat}"
     #print(url)
@@ -808,7 +827,7 @@ def get_wind_at_location_from_data(wind_data, mylat, mylng, verbose=False):
             found_lng=True
             break
     if not found_lat or not found_lng:
-        raise OutOfBoundsException("could not find index for lat or long")
+        raise OutOfBoundsException(f"could not find index for lat/lng= {mylat},{mylng}")
     ndx_n = lat_ndx
     ndx_s = lat_ndx-1
     ndx_w = lng_ndx

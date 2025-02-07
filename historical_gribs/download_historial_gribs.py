@@ -4,8 +4,10 @@ import os.path
 import time
 
 
-year=2020
-days=range(1,25)
+#year=2020
+#days=range(1,25)
+year=2024
+days=range(25,30)
 hours=[0,6,12,18]
 
 #url = "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.20240701/00/atmos/gfs.t00z.pgrb2.0p25.f000"

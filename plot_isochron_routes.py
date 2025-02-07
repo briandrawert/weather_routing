@@ -52,13 +52,13 @@ def plot_isochron_routes(isochrons=None, waypoints=None,rhumb_route=None, min_ro
                         line=dict(color='rgba(255, 0, 0, 0.25)', width=2),
                         hovertext=f"{route[-1]['date']}"
                     ))
-                    # Add start and end points
-                    fig.add_trace(go.Scattermapbox(
-                        lat=[route[-2]['lat'], route[-1]['lat']],
-                        lon=[route[-2]['lng'], route[-1]['lng']],
-                        mode='markers',
-                        marker=dict(size=8, color=['black', 'grey']),  
-                    ))
+                    # # Add start and end points
+                    # fig.add_trace(go.Scattermapbox(
+                    #     lat=[route[-2]['lat'], route[-1]['lat']],
+                    #     lon=[route[-2]['lng'], route[-1]['lng']],
+                    #     mode='markers',
+                    #     marker=dict(size=8, color=['black', 'grey']),  
+                    # ))
             isochron_color = 'rgba(255, 165, 0, 0.75)'
             if t % 2 == 0: isochron_color = 'rgba(165, 255, 0, 0.75)'
             fig.add_trace(go.Scattermapbox(
