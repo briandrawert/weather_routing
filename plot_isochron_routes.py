@@ -99,7 +99,8 @@ def plot_isochron_routes(isochrons=None, waypoints=None,rhumb_route=None, min_ro
             lon=rhumb_route['lng'],
             mode='lines',
             line=dict(color='blue', width=2),
-            hovertext=rhumb_route['date']
+            hovertext=rhumb_route['hovertext']
+            #hovertext=f"twa={rhumb_route['twa']} mag={rhumb_route['mag']:.1f} sog={rhumb_route['sog']:.1f}"
         ))
     
     if min_route is not None:
@@ -114,13 +115,20 @@ def plot_isochron_routes(isochrons=None, waypoints=None,rhumb_route=None, min_ro
     
 
     if waypoints is not None:  
-        # Add scatter points for waypoints
-        scatter_points = px.scatter_mapbox(waypoints, 
-                                           lat="lat", 
-                                           lon="lng", 
-                                           hover_name="name")
-        fig.add_traces(scatter_points.data)
+        fig.add_trace(go.Scattermapbox(
+            lat=waypoints['lat'],
+            lon=waypoints['lng'],
+            mode='markers',
+            marker=dict(size=8, color='rgba(255,0,0,0.25)'),  
+        ))        
 
+        fig.add_trace(go.Scattermapbox(
+            lat=waypoints['lat'],
+            lon=waypoints['lng'],
+            mode='lines',
+            line=dict(color='rgba(255,0,0,0.25)', width=2),
+            hovertext="rhumb"
+        ))
 
     if show_shore_boundaries:
         # Add the shore boundary line to the figure

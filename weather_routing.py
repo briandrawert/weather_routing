@@ -11,6 +11,7 @@ import pygrib
 import pickle
 import copy
 import numpy
+import traceback
 
 shore_boundaries=[
   [ (33.72042, -118.20665), #Long breach, PV
@@ -106,7 +107,7 @@ def route_isochrons(waypoints, start_date, start_time, wind_data_dir=None, time_
                 print()
         ####
     except Exception as e:
-        print("Caught Exception {e}")
+        print(f"Caught Exception {e}")
         traceback.print_exc()
     print(f"total compute time={time.time()-tic:.2f}s")
     return isochrons
@@ -327,7 +328,8 @@ def route_all_paths(waypoints_df, hour_offset=0, start_date=None, start_time=Non
         simulation_time=hour_offset,
         FCdate=FCdate,
         FCtime=FCtime,
-        wind_data_dir=wind_data_dir
+        wind_data_dir=wind_data_dir,
+        max_deg_deviation_from_rhumb=max_deg_deviation_from_rhumb
         )
     print(f"Rhumb route takes {rhumb_route_t} steps")
 
@@ -339,7 +341,7 @@ def route_all_paths(waypoints_df, hour_offset=0, start_date=None, start_time=Non
                         FCdate=FCdate, FCtime=FCtime, 
                         wind_data_dir=wind_data_dir,
                         gps_bounds=gps_bounds,
-                        max_deg_deviation_from_rhumb=90,
+                        max_deg_deviation_from_rhumb=max_deg_deviation_from_rhumb,
                         max_simulation_time=rhumb_route_t
                         )
 
@@ -351,8 +353,7 @@ def route_all_paths(waypoints_df, hour_offset=0, start_date=None, start_time=Non
 
 
 def route_shortest_path(waypoints_df, hour_offset=0, start_date=None, start_time=None, 
-                        wind_data_dir=None,gps_bounds=None,
-                        max_deg_deviation_from_rhumb=90):
+                        wind_data_dir=None,gps_bounds=None):
     """
         given a 
 
@@ -470,7 +471,8 @@ def take_simulation_step(route_storage, past_traveled_path, next_route_step,
             if simulation_time+1 > max_simulation_time:
                 continue # throw away this path
             # check the angle deviation
-            if calculate_deviation(lat, lng, lat_end, lng_end, boat_mag) > max_deg_deviation_from_rhumb:
+            deg_eviation_from_rhumb = calculate_deviation(lat, lng, lat_end, lng_end, boat_mag)
+            if deg_eviation_from_rhumb > max_deg_deviation_from_rhumb:
                 continue # throw away this path
             # check the bounds
             if gps_bounds is not None:
@@ -480,12 +482,14 @@ def take_simulation_step(route_storage, past_traveled_path, next_route_step,
             # take the next step
             next_route_step = {}
             next_route_step['twa']=angle
+            next_route_step['tws']=tws
             next_route_step['mag']=boat_mag
             next_route_step['lat']=dlat
             next_route_step['lng']=dlng
             next_route_step['dtg']=dist_to_dest
             next_route_step['sog']=boat_speed
             next_route_step['date']=FCdatetime_to_localtime(FCdate, FCtime,simulation_time+1)
+            next_route_step['hovertext']=f"{simulation_time}: twa/s={angle:.0f}/{tws:.0f} mag={boat_mag:.0f} sog={boat_speed:.1f}"
             #
             take_simulation_step(route_storage, traveled_path, next_route_step,
                         max_simulation_time,
@@ -502,7 +506,8 @@ def take_simulation_step(route_storage, past_traveled_path, next_route_step,
 #def simulate_shortest_path(lat,lng, lat_end, lng_end, gps_bounds, simulation_time=0, 
 #                            FCdate=None, FCtime=None, ):
 def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0, 
-                            FCdate=None, FCtime=None, wind_data_dir=None):
+                            FCdate=None, FCtime=None, wind_data_dir=None,
+                            max_deg_deviation_from_rhumb=90):
     """
     Simulate the sailing of the rhum line path between two points
     """
@@ -523,9 +528,15 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
     for _ in range(0,max_steps): # limit total number of steps
         if wind_data_dir is not None:
             (grib_file_date, grib_file_time, hr_offset) = get_grib_time(FCdate, FCtime, simulation_time)
-            wind_data = load_historical_gfs_forecast(wind_data_dir, grib_file_date, 
+            try:
+
+                wind_data = load_historical_gfs_forecast(wind_data_dir, grib_file_date, 
                                                           grib_file_time, hr_offset)
-            (tws, twd) = get_wind_at_location_from_data(wind_data, lat, lng)
+                (tws, twd) = get_wind_at_location_from_data(wind_data, lat, lng)
+            except Exception as e:
+                print(f"Caught Exception {e}")
+                traceback.print_exc()
+                return pandas.DataFrame(traveled_path), simulation_time
         else:
             gps_bounds = {
                'lat': (lat-0.25 , lat+0.25),
@@ -546,24 +557,43 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
         polars = polar_rhiannon(tws)
         # find all possible angles
         best_dist_togo = None
+        #smallest_dist_to_rhumb = None
+        smallest_deg_eviation_from_rhumb = None
         best_nav_args = {}
         for (angle,boat_speed) in polars:
             for delta_angle in (angle, -1*angle):
                 boat_mag = (twd+delta_angle)%360
                 (dlat,dlng) = calculate_destination_latlng(lat,lng,boat_speed,boat_mag,1) # hour
                 dist_to_dest = haversine_distance(dlat,dlng,lat_end,lng_end)
-                #print(f" twa={angle} mag={boat_mag:.1f} dest=({dlat:.1f},{dlng:.1f}) dist_togo={dist_to_dest:.1f}")
-                if (best_dist_togo is None or dist_to_dest < best_dist_togo) and \
-                    not does_path_cross_boundary(lat,lng,dlat,dlng,shore_boundaries):
+
+                #if (best_dist_togo is None or dist_to_dest < best_dist_togo) and \
+                #    not does_path_cross_boundary(lat,lng,dlat,dlng,shore_boundaries):
+                deg_eviation_from_rhumb = calculate_deviation(lat, lng, lat_end, lng_end, boat_mag)
+                if deg_eviation_from_rhumb > max_deg_deviation_from_rhumb:
+                    continue # throw away this path
+
+                #dist_to_rhumb_line = point_to_line_distance(lat, lng, lat_end, lng_end, dlat, dlng)
+                #print(f" twa={angle} mag={boat_mag:.1f} dest=({dlat:.1f},{dlng:.1f}) dist_togo={dist_to_dest:.1f} dist_to_rhumb_line={dist_to_rhumb_line:.1f}")
+                #if dist_to_dest < last_dist_togo and \
+                #   (smallest_dist_to_rhumb is None or dist_to_rhumb_line < smallest_dist_to_rhumb):
+
+                #print(f" twa={angle} mag={boat_mag:.1f} dest=({dlat:.1f},{dlng:.1f}) dist_togo={dist_to_dest:.1f} deg_eviation_from_rhumb={deg_eviation_from_rhumb:.1f}")
+
+                if smallest_deg_eviation_from_rhumb is None or deg_eviation_from_rhumb < smallest_deg_eviation_from_rhumb:
+                    smallest_deg_eviation_from_rhumb=deg_eviation_from_rhumb
                     best_dist_togo = dist_to_dest
                     best_nav_args['twa']=angle
+                    best_nav_args['tws']=tws
                     best_nav_args['mag']=boat_mag
                     best_nav_args['lat']=dlat
                     best_nav_args['lng']=dlng
                     best_nav_args['dtg']=dist_to_dest
                     best_nav_args['sog']=boat_speed
                     best_nav_args['date']=FCdatetime_to_localtime(FCdate, FCtime,simulation_time+1)
-        if best_dist_togo < last_dist_togo:
+                    best_nav_args['dev_angle']=deg_eviation_from_rhumb
+                    best_nav_args['hovertext']=f"{simulation_time}: twa/s={angle:.0f}/{tws:.0f} mag={boat_mag:.0f} sog={boat_speed:.1f}"
+        #print(f"best_dist_togo={best_dist_togo} < last_dist_togo={last_dist_togo}")
+        if best_dist_togo is not None and best_dist_togo < last_dist_togo:
             print(f"{simulation_time}: twa={best_nav_args['twa']} mag={best_nav_args['mag']:.1f} dtg={best_nav_args['dtg']:.1f} sog={best_nav_args['sog']:.1f}")
             #save and keep going
             traveled_path.append(best_nav_args)
@@ -664,11 +694,12 @@ def load_historical_gfs_forecast(wind_data_dir, grib_date, grib_time, hr_offset)
     grib_file = f"{wind_data_dir}/{grib_date}-{grib_time:02}-gfs.t{grib_time:02}z.pgrb2.0p25.f{hr_offset:03}"
     pkl_file = f"{wind_data_dir}/{grib_date}-{grib_time:02}-gfs.0p25.f{hr_offset:03}.pkl"
     if os.path.isfile(pkl_file):
-        raise Exception(f"PKL file not found:'{pkl_file}'")
         with open(pkl_file, 'rb') as fd:
             return pickle.load(fd)
     if os.path.isfile(grib_file):
         return load_historical_gfs_grib_file(grib_file,hr_offset)
+    raise Exception(f"PKL file not found:'{pkl_file}''.\nGRIB file not found: '{grib_file}'")
+
 
 def load_historical_gfs_grib_file(grib_file, simulation_time):
     # transpack gps boundaries
@@ -761,6 +792,91 @@ def download_nomads_gfs_forecast_file(grib_date, grib_time, lat_bounds, lng_boun
         print(f"Error downloading GRIB2 file: {e}")
         raise e
     
+
+# def point_to_line_distance(lat, lng, lat_end, lng_end, dlat, dlng):
+#     """Compute the shortest distance from (dlat, dlng) to the great-circle line segment formed by (lat, lng) and (lat_end, lng_end)."""
+    
+#     # Convert coordinates to radians
+#     lat1, lon1, lat2, lon2, lat3, lon3 = map(numpy.radians, [lat, lng, lat_end, lng_end, dlat, dlng])
+    
+#     # Compute vector projections
+#     A = numpy.array([numpy.cos(lat1) * numpy.cos(lon1), numpy.cos(lat1) * numpy.sin(lon1), numpy.sin(lat1)])
+#     B = numpy.array([numpy.cos(lat2) * numpy.cos(lon2), numpy.cos(lat2) * numpy.sin(lon2), numpy.sin(lat2)])
+#     P = numpy.array([numpy.cos(lat3) * numpy.cos(lon3), numpy.cos(lat3) * numpy.sin(lon3), numpy.sin(lat3)])
+
+#     # Vector from A to B and A to P
+#     AB = B - A
+#     AP = P - A
+
+#     # Projection of AP onto AB
+#     AB_norm = numpy.dot(AB, AB)
+#     projection = numpy.dot(AP, AB) / AB_norm
+
+#     # Find the closest point on the segment
+#     if projection < 0:
+#         closest_point = A
+#     elif projection > 1:
+#         closest_point = B
+#     else:
+#         closest_point = A + projection * AB
+
+#     # Compute the perpendicular distance
+#     perpendicular_distance = numpy.linalg.norm(P - closest_point)
+
+#     # Convert back to meters
+#     earth_radius = 6371000  # Earth's radius in meters
+#     return perpendicular_distance * earth_radius
+
+def point_to_line_distance(lat, lng, lat_end, lng_end, dlat, dlng):
+    """
+    Calculate the shortest distance from a point (dlat, dlng) to a great-circle path 
+    defined by (lat, lng) and (lat_end, lng_end), in nautical miles.
+
+    Args:
+        lat, lng: Coordinates of the first point on the great circle (degrees).
+        lat_end, lng_end: Coordinates of the second point on the great circle (degrees).
+        dlat, dlng: Coordinates of the point to measure distance from (degrees).
+
+    Returns:
+        Distance in nautical miles.
+    """
+    # Earth's radius in nautical miles
+    R_NM = 3440.065
+
+    def sph_to_cart(lat, lng):
+        """Convert spherical coordinates (lat, lng) to Cartesian (x, y, z)."""
+        x = math.cos(lat) * math.cos(lng)
+        y = math.cos(lat) * math.sin(lng)
+        z = math.sin(lat)
+        return x, y, z
+
+    def vector_cross(x1, y1, z1, x2, y2, z2):
+        """Compute cross product of two vectors (x1, y1, z1) and (x2, y2, z2)."""
+        cx = y1 * z2 - z1 * y2
+        cy = z1 * x2 - x1 * z2
+        cz = x1 * y2 - y1 * x2
+        return cx, cy, cz
+
+    # Convert degrees to radians
+    lat, lng, lat_end, lng_end, dlat, dlng = map(math.radians, [lat, lng, lat_end, lng_end, dlat, dlng])
+
+    # Convert to Cartesian coordinates
+    x1, y1, z1 = sph_to_cart(lat, lng)
+    x2, y2, z2 = sph_to_cart(lat_end, lng_end)
+    xd, yd, zd = sph_to_cart(dlat, dlng)
+
+    # Compute normal vector to great circle (cross product)
+    nx, ny, nz = vector_cross(x1, y1, z1, x2, y2, z2)
+
+    # Compute perpendicular distance to great circle
+    numerator = abs(nx * xd + ny * yd + nz * zd)
+    denominator = math.sqrt(nx**2 + ny**2 + nz**2)
+    angular_distance = math.asin(numerator / denominator)  # Radians
+
+    # Convert to nautical miles
+    return angular_distance * R_NM
+
+
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     """
