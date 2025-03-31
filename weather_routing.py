@@ -471,8 +471,8 @@ def take_simulation_step(route_storage, past_traveled_path, next_route_step,
             if simulation_time+1 > max_simulation_time:
                 continue # throw away this path
             # check the angle deviation
-            deg_eviation_from_rhumb = calculate_deviation(lat, lng, lat_end, lng_end, boat_mag)
-            if deg_eviation_from_rhumb > max_deg_deviation_from_rhumb:
+            deg_deviation_from_rhumb = calculate_deviation(lat, lng, lat_end, lng_end, boat_mag)
+            if deg_deviation_from_rhumb > max_deg_deviation_from_rhumb:
                 continue # throw away this path
             # check the bounds
             if gps_bounds is not None:
@@ -558,7 +558,7 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
         # find all possible angles
         best_dist_togo = None
         #smallest_dist_to_rhumb = None
-        smallest_deg_eviation_from_rhumb = None
+        smallest_deg_deviation_from_rhumb = None
         best_nav_args = {}
         for (angle,boat_speed) in polars:
             for delta_angle in (angle, -1*angle):
@@ -568,8 +568,8 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
 
                 #if (best_dist_togo is None or dist_to_dest < best_dist_togo) and \
                 #    not does_path_cross_boundary(lat,lng,dlat,dlng,shore_boundaries):
-                deg_eviation_from_rhumb = calculate_deviation(lat, lng, lat_end, lng_end, boat_mag)
-                if deg_eviation_from_rhumb > max_deg_deviation_from_rhumb:
+                deg_deviation_from_rhumb = calculate_deviation(lat, lng, lat_end, lng_end, boat_mag)
+                if deg_deviation_from_rhumb > max_deg_deviation_from_rhumb:
                     continue # throw away this path
 
                 #dist_to_rhumb_line = point_to_line_distance(lat, lng, lat_end, lng_end, dlat, dlng)
@@ -577,10 +577,10 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
                 #if dist_to_dest < last_dist_togo and \
                 #   (smallest_dist_to_rhumb is None or dist_to_rhumb_line < smallest_dist_to_rhumb):
 
-                #print(f" twa={angle} mag={boat_mag:.1f} dest=({dlat:.1f},{dlng:.1f}) dist_togo={dist_to_dest:.1f} deg_eviation_from_rhumb={deg_eviation_from_rhumb:.1f}")
+                #print(f" twa={angle} mag={boat_mag:.1f} dest=({dlat:.1f},{dlng:.1f}) dist_togo={dist_to_dest:.1f} deg_deviation_from_rhumb={deg_deviation_from_rhumb:.1f}")
 
-                if smallest_deg_eviation_from_rhumb is None or deg_eviation_from_rhumb < smallest_deg_eviation_from_rhumb:
-                    smallest_deg_eviation_from_rhumb=deg_eviation_from_rhumb
+                if smallest_deg_deviation_from_rhumb is None or deg_deviation_from_rhumb < smallest_deg_deviation_from_rhumb:
+                    smallest_deg_deviation_from_rhumb=deg_deviation_from_rhumb
                     best_dist_togo = dist_to_dest
                     best_nav_args['twa']=angle
                     best_nav_args['tws']=tws
@@ -590,7 +590,7 @@ def simulate_shortest_path(lat,lng, lat_end, lng_end, simulation_time=0,
                     best_nav_args['dtg']=dist_to_dest
                     best_nav_args['sog']=boat_speed
                     best_nav_args['date']=FCdatetime_to_localtime(FCdate, FCtime,simulation_time+1)
-                    best_nav_args['dev_angle']=deg_eviation_from_rhumb
+                    best_nav_args['dev_angle']=deg_deviation_from_rhumb
                     best_nav_args['hovertext']=f"{simulation_time}: twa/s={angle:.0f}/{tws:.0f} mag={boat_mag:.0f} sog={boat_speed:.1f}"
         #print(f"best_dist_togo={best_dist_togo} < last_dist_togo={last_dist_togo}")
         if best_dist_togo is not None and best_dist_togo < last_dist_togo:
