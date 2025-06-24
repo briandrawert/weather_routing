@@ -1,90 +1,104 @@
 import serial
 import pynmea2
 import time
+import json
+import os
 from datetime import datetime, timezone
+from collections import deque
 
-SERIAL_PORT = '/dev/ttyUSB0'   # Update this as needed
-BAUD_RATE = 4800               # Standard NMEA baud rate
+# === Configuration ===
+SERIAL_PORT = '/dev/ttyUSB0'
+BAUD_RATE = 4800
+PHP_JSON_PATH = '/var/www/html/nmea_data.json'
+LOG_DIR = '/home/brian/gps_logger/logs'
+VARIABLES = ['latitude', 'longitude', 'sog', 'cog', 'wind_speed', 'wind_dir', 'boat_speed', 'heading']
+BUFFER_SECONDS = 600
 
-def collect_nmea_data(serial_conn, duration=60):
-    """Collects NMEA data for a duration and returns the most recent values."""
-    data = {
-        'latitude': None,
-        'longitude': None,
-        'sog': None,         # Speed over ground
-        'cog': None,         # Course over ground
-        'wind_dir': None,
-        'wind_speed': None,
-        'boat_speed': None,  # Speed through water
-    }
+os.makedirs(LOG_DIR, exist_ok=True)
+data_buffer = {var: deque(maxlen=BUFFER_SECONDS) for var in VARIABLES}
+last_log_minute = None
+latest_values = {var: None for var in VARIABLES}
 
-    start_time = time.time()
+# === NMEA Parsing ===
+def parse_nmea_sentence(sentence):
+    parsed = {}
+    try:
+        msg = pynmea2.parse(sentence)
 
-    while time.time() - start_time < duration:
-        try:
-            line = serial_conn.readline().decode('ascii', errors='replace').strip()
+        if isinstance(msg, pynmea2.types.talker.RMC):
+            if msg.status == 'A':
+                parsed['latitude'] = msg.latitude
+                parsed['longitude'] = msg.longitude
+                parsed['sog'] = float(msg.spd_over_grnd or 0.0)
+                parsed['cog'] = float(msg.true_course or 0.0)
 
-            if not line.startswith('$II') and not line.startswith('$GP'):
-                continue
+        elif msg.sentence_type == 'MWV' and msg.status == 'A':
+            parsed['wind_dir'] = float(msg.wind_angle or 0.0)
+            parsed['wind_speed'] = float(msg.wind_speed or 0.0)
 
-            if line.startswith('$IIRMC'):
-                try:
-                    msg = pynmea2.parse(line)
-                    data['latitude'] = getattr(msg, 'latitude', None)
-                    data['longitude'] = getattr(msg, 'longitude', None)
-                    data['sog'] = getattr(msg, 'spd_over_grnd', None)
-                    data['cog'] = getattr(msg, 'true_course', None)
-                except pynmea2.nmea.ParseError:
-                    continue
+        elif msg.sentence_type == 'VHW':
+            parsed['boat_speed'] = float(msg.speed_knots or 0.0)
 
-            elif line.startswith('$IIMWV'):
-                try:
-                    msg = pynmea2.parse(line)
-                    if msg.status == 'A':
-                        data['wind_dir'] = msg.wind_angle
-                        data['wind_speed'] = msg.wind_speed
-                except pynmea2.nmea.ParseError:
-                    continue
+        elif msg.sentence_type == 'HDG':
+            parsed['heading'] = float(msg.heading or 0.0)
 
-            elif line.startswith('$IIVHW'):
-                try:
-                    fields = line.split(',')
-                    if len(fields) >= 7 and fields[5]:
-                        data['boat_speed'] = float(fields[5])
-                except (ValueError, IndexError):
-                    continue
+    except pynmea2.ParseError:
+        pass
 
+    return parsed
 
-            #return if we have collected all the data
-            if not any(v is None for v in data.values()):
-                return data
- 
-        except Exception as e:
-            print(f"Error: {e}")
-            continue
+# === Logging and Streaming ===
+def write_minute_log(timestamp, data):
+    date_str = timestamp.strftime('%Y-%m-%d')
+    log_path = os.path.join(LOG_DIR, f'{date_str}.log')
+    with open(log_path, 'a') as f:
+        line = f"{timestamp.isoformat()} UTC," + ",".join(f"{k}:{data.get(k)}" for k in VARIABLES) + "\n"
+        f.write(line)
 
-    return data
+def update_php_json():
+    output = {var: list(data_buffer[var]) for var in VARIABLES}
+    try:
+        with open(PHP_JSON_PATH, 'w') as f:
+            json.dump(output, f)
+    except Exception as e:
+        print(f"Failed to write JSON: {e}")
 
-def log_gps():
+# === Main Loop ===
+def main():
+    global last_log_minute
     with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1) as ser:
         while True:
-            values = collect_nmea_data(ser)
-            now = datetime.now(timezone.utc)
-            log_filename = now.strftime("%Y-%m-%d") + ".log"
+            try:
+                line = ser.readline().decode('ascii', errors='replace').strip()
+                parsed = parse_nmea_sentence(line)
 
-            log_entry = f"{now.isoformat()} UTC, "
-            log_entry += f"Lat: {values['latitude']}, Lon: {values['longitude']}, "
-            log_entry += f"SOG: {values['sog']} kn, COG: {values['cog']}°, "
-            log_entry += f"Wind: {values['wind_dir']}° at {values['wind_speed']} kn, "
-            log_entry += f"Boat Speed: {values['boat_speed']} kn "
+                if not parsed:
+                    continue
 
-            with open(log_filename, "a") as logfile:
-                logfile.write(log_entry)
-                logfile.write("\n")
+                timestamp = datetime.now(timezone.utc)
 
-            print(f"Logged: {log_entry.strip()}")
-            time.sleep(60)
+                # Update current values and buffer
+                for var in VARIABLES:
+                    val = parsed.get(var)
+                    if val is not None:
+                        latest_values[var] = val
+                        data_buffer[var].append((timestamp.isoformat(), val))
 
-if __name__ == "__main__":
-    log_gps()
+                # Update frontend JSON every second
+                update_php_json()
+
+                # Write to log once per minute
+                current_minute = timestamp.strftime('%Y-%m-%d %H:%M')
+                if current_minute != last_log_minute:
+                    write_minute_log(timestamp, latest_values)
+                    last_log_minute = current_minute
+
+                time.sleep(1)
+
+            except Exception as e:
+                print(f"Error: {e}")
+                time.sleep(1)
+
+if __name__ == '__main__':
+    main()
 
