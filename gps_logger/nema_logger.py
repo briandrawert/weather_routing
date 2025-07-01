@@ -20,6 +20,12 @@ last_log_minute = None
 latest_values = {var: None for var in VARIABLES}
 
 # === NMEA Parsing ===
+def safe_float(value):
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
 def parse_nmea_sentence(sentence):
     parsed = {}
     try:
@@ -27,20 +33,25 @@ def parse_nmea_sentence(sentence):
 
         if isinstance(msg, pynmea2.types.talker.RMC):
             if msg.status == 'A':
-                parsed['latitude'] = msg.latitude
-                parsed['longitude'] = msg.longitude
-                parsed['sog'] = float(msg.spd_over_grnd or 0.0)
-                parsed['cog'] = float(msg.true_course or 0.0)
+                try:
+                    parsed['latitude'] = msg.latitude
+                    parsed['longitude'] = msg.longitude
+                except pynmea2.nmea.ChecksumError:
+                    parsed['latitude'] = None
+                    parsed['longitude'] = None
 
-        elif msg.sentence_type == 'MWV' and msg.status == 'A':
-            parsed['wind_dir'] = float(msg.wind_angle or 0.0)
-            parsed['wind_speed'] = float(msg.wind_speed or 0.0)
+                parsed['sog'] = safe_float(msg.spd_over_grnd)
+                parsed['cog'] = safe_float(msg.true_course)
+
+        elif msg.sentence_type == 'MWV' and getattr(msg, 'status', '') == 'A':
+            parsed['wind_dir'] = safe_float(getattr(msg, 'wind_angle', None))
+            parsed['wind_speed'] = safe_float(getattr(msg, 'wind_speed', None))
 
         elif msg.sentence_type == 'VHW':
-            parsed['boat_speed'] = float(msg.speed_knots or 0.0)
+            parsed['boat_speed'] = safe_float(getattr(msg, 'speed_knots', None))
 
         elif msg.sentence_type == 'HDG':
-            parsed['heading'] = float(msg.heading or 0.0)
+            parsed['heading'] = safe_float(getattr(msg, 'heading', None))
 
     except pynmea2.ParseError:
         pass
